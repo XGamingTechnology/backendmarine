@@ -1,0 +1,92 @@
+# -----------------------
+# Node.js & NPM
+# -----------------------
+node_modules/
+npm-debug.log
+yarn-error.log
+yarn-debug.log
+.pnpm-debug.log
+
+# Jangan upload dependency
+# Mereka akan diinstall otomatis via npm install
+
+# -----------------------
+# Environment Variables
+# -----------------------
+.env
+.env.local
+.env.development
+.env.production
+
+# 🔐 JANGAN SAMPAI KEBOCORAN PASSWORD DATABASE!
+# Isi .env: DB_PASSWORD, JWT_SECRET, dll
+
+# -----------------------
+# Logs
+# -----------------------
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# -----------------------
+# Build Artifacts
+# -----------------------
+dist
+build
+out
+.next
+.nuxt
+output
+
+# -----------------------
+# IDE & Editor
+# -----------------------
+.DS_Store
+Thumbs.db
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.cache
+temp
+tmp
+*.swp
+*.swo
+.DS_Store?
+*.sublime-project
+*.sublime-workspace
+
+# -----------------------
+# Database
+# -----------------------
+# Jangan upload file database lokal
+*.sqlite
+*.sqlite3
+*.db
+/data
+
+# Tapi struktur database (SQL) boleh di-commit
+# Simpan di folder: /database/schema.sql, /database/migrations/
+
+# -----------------------
+# Sensitive Files
+# -----------------------
+# Jangan upload file yang mengandung password
+config/secrets.json
+secrets/**
+.env.backup
+.env.bak
+
+# -----------------------
+# OS
+# -----------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
