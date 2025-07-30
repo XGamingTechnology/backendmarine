@@ -4,60 +4,70 @@ import { ApolloServer } from "apollo-server-express";
 import dotenv from "dotenv";
 import http from "http";
 import cors from "cors";
+import path from "path";
+import { fileURLToPath } from "url";
+import { dirname } from "path";
 
-// Load environment variables
 dotenv.config();
 
-// Import GraphQL Type Definitions dan Resolvers (akan dibuat nanti)
-// server.js
+// ✅ Import client dari database.js
+import client from "./src/config/database.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 import typeDefs from "./src/graphql/schemas/index.js";
 import resolvers from "./src/graphql/resolvers/index.js";
 
-// Import DB connection jika sudah ada (opsional untuk sekarang)
-// import connectDB from './src/config/database';
-// Tambahkan ini di bagian atas server.js, setelah import lain
-import "./src/config/database.js";
+import authRoute from "./src/routes/auth.js";
+import uploadRoute from "./src/routes/upload.js";
+import statusRoute from "./src/routes/status.js";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-
-// Create HTTP server
 const httpServer = http.createServer(app);
 
-// Enable CORS
 app.use(
   cors({
     origin: "*",
-    credentials: true,
   })
 );
 
-// Function to start Apollo Server
+app.use(express.json({ limit: "50mb" }));
+app.use("/images", express.static(path.join(__dirname, "public", "images")));
+
+app.use("/api/auth", authRoute);
+app.use("/api/upload", uploadRoute);
+app.use("/api/status", statusRoute);
+
+app.get("/api", (req, res) => {
+  res.json({ message: "WebGIS Backend API", version: "1.0" });
+});
+
 async function startApolloServer() {
   const server = new ApolloServer({
     typeDefs,
     resolvers,
     context: ({ req }) => {
-      // Di sini bisa tambahkan auth, user, dll nanti
       return {
-        // req,
+        req,
+        client, // ✅ Sekarang `client` tersedia
       };
     },
-    introspection: true, // Enable GraphQL Playground di production? Hanya untuk dev
-    playground: true,
+    introspection: true,
+    playground: process.env.NODE_ENV !== "production",
   });
 
   await server.start();
   server.applyMiddleware({ app, path: "/graphql" });
 
-  // Start server
-  app.listen(PORT, () => {
+  httpServer.listen(PORT, () => {
+    console.log(`✅ Connected to PostgreSQL`);
     console.log(`🚀 Server running at http://localhost:${PORT}`);
-    console.log(`🚀 GraphQL endpoint available at http://localhost:${PORT}/graphql`);
+    console.log(`🚀 GraphQL endpoint: http://localhost:${PORT}/graphql`);
   });
 }
 
-// Jalankan server
 startApolloServer().catch((err) => {
-  console.error("Error starting server:", err);
+  console.error("❌ Error starting server:", err);
 });
