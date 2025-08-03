@@ -22,6 +22,7 @@ import resolvers from "./src/graphql/resolvers/index.js";
 import authRoute from "./src/routes/auth.js";
 import uploadRoute from "./src/routes/upload.js";
 import statusRoute from "./src/routes/status.js";
+import transectRoutes from "./src/routes/transect.js"; // Harus tulis .js
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -32,6 +33,8 @@ app.use(
     origin: "*",
   })
 );
+
+app.use("/api", transectRoutes);
 
 app.use(express.json({ limit: "50mb" }));
 app.use("/images", express.static(path.join(__dirname, "public", "images")));
