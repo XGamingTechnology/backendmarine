@@ -61,6 +61,13 @@ const typeDefs = gql`
     meta: JSON
   }
 
+  # 🔥 Tipe data opsi layer (untuk dropdown)
+  type LayerOption {
+    id: Int!
+    name: String!
+    layerType: String!
+  }
+
   # Input untuk create/update
   input GeometryInput {
     type: String!
@@ -87,6 +94,20 @@ const typeDefs = gql`
     message: String!
   }
 
+  # ✅ Response untuk simpan draft
+  type DraftResponse {
+    success: Boolean!
+    message: String!
+    draftId: Int!
+  }
+
+  # ✅ ProcessSurveyResponse: Hasil dari process_survey / generate_survey
+  type ProcessSurveyResponse {
+    success: Boolean!
+    message: String!
+    result: JSON # GeoJSON hasil akhir
+  }
+
   # Query utama
   type Query {
     """
@@ -108,6 +129,11 @@ const typeDefs = gql`
     🔥 Ambil semua definisi layer (untuk sidebar dinamis)
     """
     layerDefinitions: [LayerDefinition!]!
+
+    """
+    🔥 Ambil opsi layer berdasarkan tipe (misal: area_sungai)
+    """
+    layerOptions(layerType: String!): [LayerOption!]!
   }
 
   type LayerGroup {
@@ -158,6 +184,21 @@ const typeDefs = gql`
     Hapus user — hanya untuk admin
     """
     deleteUser(id: ID!): Boolean!
+
+    """
+    🔥 Simpan draft garis sungai ke database
+    """
+    saveRiverLineDraft(geom: JSON!): DraftResponse!
+
+    """
+    🔥 Proses survey dari draft: generate transect, clip, simpan hasil
+    """
+    generateSurvey(surveyId: String!, riverLineDraftId: Int!, areaId: Int!, spasi: Float!, panjang: Float!): ProcessSurveyResponse!
+
+    """
+    🔥 Proses survey: kirim riverLine langsung sebagai GeoJSON (untuk kompatibilitas lama)
+    """
+    processSurveyWithLine(surveyId: String!, riverLine: JSON!, areaId: Int!, spasi: Float!, panjang: Float!): ProcessSurveyResponse!
   }
 `;
 
