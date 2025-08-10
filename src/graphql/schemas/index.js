@@ -191,6 +191,11 @@ const typeDefs = gql`
     saveRiverLineDraft(geom: JSON!): DraftResponse!
 
     """
+    🔥 Simpan draft polygon ke database
+    """
+    savePolygonDraft(geom: JSON!): DraftResponse!
+
+    """
     🔥 Proses survey dari draft: generate transect, clip, simpan hasil
     """
     generateSurvey(surveyId: String!, riverLineDraftId: Int!, areaId: Int!, spasi: Float!, panjang: Float!): ProcessSurveyResponse!
@@ -199,6 +204,11 @@ const typeDefs = gql`
     🔥 Proses survey: kirim riverLine langsung sebagai GeoJSON (untuk kompatibilitas lama)
     """
     processSurveyWithLine(surveyId: String!, riverLine: JSON!, areaId: Int!, spasi: Float!, panjang: Float!): ProcessSurveyResponse!
+
+    """
+    🔥 Proses survey dari draft polygon
+    """
+    generateTransekFromPolygon(surveyId: String!, polygonDraftId: Int!, lineCount: Int!, spacing: Float!): ProcessSurveyResponse!
   }
 `;
 
