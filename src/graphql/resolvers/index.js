@@ -207,19 +207,19 @@ const resolvers = {
     },
 
     // --- 4. Proses Transek dari Draft Polygon ---
-    generateTransekFromPolygon: async (_, { surveyId, polygonDraftId, lineCount, spacing }) => {
+    generateTransekFromPolygonByDraft: async (_, { surveyId, polygonDraftId, lineCount, spacing }) => {
       if (!surveyId || !polygonDraftId || lineCount < 1 || spacing <= 0) {
         throw new Error("Parameter tidak valid");
       }
 
-      const query = `SELECT * FROM generate_transek_from_polygon($1, $2, $3, $4)`;
+      const query = `SELECT * FROM generate_transek_from_polygon_by_draft($1, $2, $3, $4)`;
       try {
         const result = await client.query(query, [surveyId, polygonDraftId, lineCount, spacing]);
         if (result.rows.length > 0) {
           return {
             success: true,
             message: "Proses transek dari polygon selesai",
-            result: result.rows[0].generate_transek_from_polygon,
+            result: result.rows[0].generate_transek_from_polygon_by_draft,
           };
         }
         throw new Error("Tidak ada hasil");

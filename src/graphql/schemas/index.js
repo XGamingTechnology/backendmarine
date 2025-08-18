@@ -209,6 +209,11 @@ const typeDefs = gql`
     🔥 Proses survey dari draft polygon
     """
     generateTransekFromPolygon(surveyId: String!, polygonDraftId: Int!, lineCount: Int!, spacing: Float!): ProcessSurveyResponse!
+
+    """
+    🔥 Proses transek dari draft polygon (versi baru)
+    """
+    generateTransekFromPolygonByDraft(surveyId: String!, polygonDraftId: Int!, lineCount: Int!, spacing: Float!): ProcessSurveyResponse!
   }
 `;
 
