@@ -134,6 +134,12 @@ const typeDefs = gql`
     🔥 Ambil opsi layer berdasarkan tipe (misal: area_sungai)
     """
     layerOptions(layerType: String!): [LayerOption!]!
+
+    """
+    🔥 Ambil semua sampling point berdasarkan survey_id
+    Gunakan untuk export langsung tanpa ambil semua data
+    """
+    samplingPointsBySurveyId(surveyId: String!): [SpatialFeature!]!
   }
 
   type LayerGroup {
@@ -206,14 +212,14 @@ const typeDefs = gql`
     processSurveyWithLine(surveyId: String!, riverLine: JSON!, areaId: Int!, spasi: Float!, panjang: Float!): ProcessSurveyResponse!
 
     """
-    🔥 Proses survey dari draft polygon
+    🔥 Proses survey dari draft polygon (versi lama - kompatibilitas)
     """
     generateTransekFromPolygon(surveyId: String!, polygonDraftId: Int!, lineCount: Int!, spacing: Float!): ProcessSurveyResponse!
 
     """
-    🔥 Proses transek dari draft polygon (versi baru)
+    🔥 Proses transek dari draft polygon (versi baru: bisa lineCount, pointCount, atau fixedSpacing)
     """
-    generateTransekFromPolygonByDraft(surveyId: String!, polygonDraftId: Int!, lineCount: Int!, spacing: Float!): ProcessSurveyResponse!
+    generateTransekFromPolygonByDraft(surveyId: String!, polygonDraftId: Int!, lineCount: Int, pointCount: Int, fixedSpacing: Float): ProcessSurveyResponse!
   }
 `;
 

@@ -102,6 +102,36 @@ const resolvers = {
         throw new Error("Gagal ambil opsi layer");
       }
     },
+
+    // ✅ 🔥 AMBIL SAMPLING POINT BERDASARKAN survey_id
+    samplingPointsBySurveyId: async (_, { surveyId }) => {
+      const query = `
+        SELECT 
+          id,
+          layer_type,
+          name,
+          description,
+          ST_AsGeoJSON(geom)::json AS geometry,
+          metadata
+        FROM spatial_features 
+        WHERE layer_type = 'valid_sampling_point'
+          AND metadata->>'survey_id' = $1
+      `;
+      try {
+        const result = await client.query(query, [surveyId]);
+        return result.rows.map((row) => ({
+          id: row.id,
+          layerType: row.layer_type,
+          name: row.name,
+          description: row.description,
+          geometry: row.geometry,
+          meta: row.metadata,
+        }));
+      } catch (err) {
+        console.error("❌ Gagal ambil samplingPointsBySurveyId:", err);
+        throw new Error("Gagal ambil data sampling");
+      }
+    },
   },
 
   Mutation: {
@@ -206,25 +236,52 @@ const resolvers = {
       }
     },
 
-    // --- 4. Proses Transek dari Draft Polygon ---
-    generateTransekFromPolygonByDraft: async (_, { surveyId, polygonDraftId, lineCount, spacing }) => {
-      if (!surveyId || !polygonDraftId || lineCount < 1 || spacing <= 0) {
-        throw new Error("Parameter tidak valid");
+    // --- 4. Proses Transek dari Draft Polygon (versi baru: dukung lineCount, pointCount, fixedSpacing)
+    generateTransekFromPolygonByDraft: async (_, { surveyId, polygonDraftId, lineCount, pointCount, fixedSpacing }) => {
+      // Validasi input
+      if (!surveyId || !polygonDraftId) {
+        return {
+          success: false,
+          message: "Parameter surveyId dan polygonDraftId wajib diisi",
+        };
       }
 
-      const query = `SELECT * FROM generate_transek_from_polygon_by_draft($1, $2, $3, $4)`;
+      // Pastikan hanya satu yang diisi
+      const countArgs = [lineCount, pointCount, fixedSpacing].filter((x) => x !== null && x !== undefined).length;
+      if (countArgs === 0) {
+        return {
+          success: false,
+          message: "Harus set lineCount, pointCount, atau fixedSpacing",
+        };
+      }
+      if (countArgs > 1) {
+        return {
+          success: false,
+          message: "Hanya boleh set satu dari: lineCount, pointCount, fixedSpacing",
+        };
+      }
+
+      const query = `SELECT * FROM generate_transek_from_polygon_by_draft($1, $2, $3, $4, $5)`;
       try {
-        const result = await client.query(query, [surveyId, polygonDraftId, lineCount, spacing]);
+        const result = await client.query(query, [surveyId, polygonDraftId, lineCount || null, pointCount || null, fixedSpacing || null]);
+
         if (result.rows.length > 0) {
+          const dbResult = result.rows[0].generate_transek_from_polygon_by_draft;
           return {
-            success: true,
-            message: "Proses transek dari polygon selesai",
-            result: result.rows[0].generate_transek_from_polygon_by_draft,
+            success: dbResult.success,
+            message: dbResult.message,
           };
         }
-        throw new Error("Tidak ada hasil");
+        return {
+          success: false,
+          message: "Tidak ada hasil dari fungsi DB",
+        };
       } catch (err) {
-        throw new Error(`Gagal proses transek dari polygon: ${err.message}`);
+        console.error("❌ Gagal proses transek dari polygon:", err);
+        return {
+          success: false,
+          message: `Gagal proses transek dari polygon: ${err.message}`,
+        };
       }
     },
 
