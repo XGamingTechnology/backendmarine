@@ -7,11 +7,10 @@ import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
+import jwt from "jsonwebtoken";
+import client from "./src/config/database.js";
 
 dotenv.config();
-
-// ✅ Import client dari database.js
-import client from "./src/config/database.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -19,14 +18,27 @@ const __dirname = dirname(__filename);
 import typeDefs from "./src/graphql/schemas/index.js";
 import resolvers from "./src/graphql/resolvers/index.js";
 
+// ✅ Import routes
 import authRoute from "./src/routes/auth.js";
 import uploadRoute from "./src/routes/upload.js";
 import statusRoute from "./src/routes/status.js";
-import transectRoutes from "./src/routes/transect.js"; // Harus tulis .js
+import transectRoutes from "./src/routes/transect.js";
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 const httpServer = http.createServer(app);
+
+// --- Middleware: Verify JWT ---
+const getUserFromToken = (token) => {
+  if (!token) return null;
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || "rahasia");
+    return { id: decoded.userId, role: decoded.role };
+  } catch (err) {
+    console.error("❌ JWT Invalid:", err.message);
+    return null;
+  }
+};
 
 app.use(
   cors({
@@ -34,14 +46,14 @@ app.use(
   })
 );
 
-app.use("/api", transectRoutes);
-
 app.use(express.json({ limit: "50mb" }));
 app.use("/images", express.static(path.join(__dirname, "public", "images")));
 
+// ✅ Gunakan routes
 app.use("/api/auth", authRoute);
 app.use("/api/upload", uploadRoute);
 app.use("/api/status", statusRoute);
+app.use("/api", transectRoutes);
 
 app.get("/api", (req, res) => {
   res.json({ message: "WebGIS Backend API", version: "1.0" });
@@ -52,9 +64,14 @@ async function startApolloServer() {
     typeDefs,
     resolvers,
     context: ({ req }) => {
+      const authHeader = req.headers.authorization;
+      const token = authHeader?.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
+      const user = getUserFromToken(token);
+
       return {
         req,
-        client, // ✅ Sekarang `client` tersedia
+        client,
+        user,
       };
     },
     introspection: true,
@@ -68,6 +85,7 @@ async function startApolloServer() {
     console.log(`✅ Connected to PostgreSQL`);
     console.log(`🚀 Server running at http://localhost:${PORT}`);
     console.log(`🚀 GraphQL endpoint: http://localhost:${PORT}/graphql`);
+    console.log(`💡 Playground: http://localhost:${PORT}/graphql`);
   });
 }
 

@@ -7,5 +7,5 @@ const router = express.Router();
 router.post("/login", authController.login);
 router.post("/register", authController.register);
 
-// ✅ Tambahkan export default
+// ✅ Export default
 export default router;

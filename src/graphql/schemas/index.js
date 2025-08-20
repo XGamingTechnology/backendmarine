@@ -37,6 +37,8 @@ const typeDefs = gql`
     createdBy: User
     source: String
     meta: JSON
+    user_id: Int # ✅ Tambah user_id
+    is_shared: Boolean # ✅ Tambah is_shared
   }
 
   # Tipe data cross_sections
