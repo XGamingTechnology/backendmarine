@@ -37,8 +37,8 @@ const typeDefs = gql`
     createdBy: User
     source: String
     meta: JSON
-    user_id: Int # ✅ Tambah user_id
-    is_shared: Boolean # ✅ Tambah is_shared
+    user_id: Int
+    is_shared: Boolean
   }
 
   # Tipe data cross_sections
@@ -76,7 +76,9 @@ const typeDefs = gql`
     coordinates: [[Float]]!
   }
 
+  # ✅ DIPERBAIKI: Tambah field category dan icon
   input MetadataInput {
+    # --- Visual Styling ---
     icon: String
     iconColor: String
     markerColor: String
@@ -88,6 +90,10 @@ const typeDefs = gql`
     imageUrl: String
     imageWidth: Int
     imageHeight: Int
+
+    # --- Toponimi & Kategori ---
+    category: String # ✅ Tambah: kategori toponimi
+    source: String # ✅ Opsional: tambah metadata.source
   }
 
   # Mutation Response standar
@@ -171,7 +177,7 @@ const typeDefs = gql`
     """
     Hapus spatial feature berdasarkan ID
     """
-    deleteSpatialFeature(id: ID!): Boolean
+    deleteSpatialFeature(id: ID!): MutationResponse!
 
     """
     Login user dan dapatkan JWT token
@@ -191,7 +197,7 @@ const typeDefs = gql`
     """
     Hapus user — hanya untuk admin
     """
-    deleteUser(id: ID!): Boolean!
+    deleteUser(id: ID!): MutationResponse!
 
     """
     🔥 Simpan draft garis sungai ke database
@@ -222,6 +228,12 @@ const typeDefs = gql`
     🔥 Proses transek dari draft polygon (versi baru: bisa lineCount, pointCount, atau fixedSpacing)
     """
     generateTransekFromPolygonByDraft(surveyId: String!, polygonDraftId: Int!, lineCount: Int, pointCount: Int, fixedSpacing: Float): ProcessSurveyResponse!
+
+    """
+    🔥 Hapus semua hasil survey berdasarkan surveyId
+    Digunakan untuk regenerate hasil
+    """
+    deleteSurveyResults(surveyId: String!): MutationResponse!
   }
 `;
 

@@ -9,6 +9,7 @@ import { fileURLToPath } from "url";
 import { dirname } from "path";
 import jwt from "jsonwebtoken";
 import client from "./src/config/database.js";
+import toponimiIconsRoute from "./src/routes/toponimi-icons.js";
 
 dotenv.config();
 
@@ -54,6 +55,9 @@ app.use("/api/auth", authRoute);
 app.use("/api/upload", uploadRoute);
 app.use("/api/status", statusRoute);
 app.use("/api", transectRoutes);
+
+// ✅ Gunakan route
+app.use("/api", toponimiIconsRoute); // atau app.use("/api/toponimi-icons", toponimiIconsRoute);
 
 app.get("/api", (req, res) => {
   res.json({ message: "WebGIS Backend API", version: "1.0" });

@@ -47,9 +47,18 @@ const resolvers = {
       if (!user) throw new Error("Unauthorized");
 
       let query = `
-        SELECT id, layer_type, name, description, 
-               ST_AsGeoJSON(geom)::json AS geometry, 
-               created_at, updated_at, source, metadata, user_id, is_shared
+        SELECT 
+          id, 
+          layer_type, 
+          name, 
+          description, 
+          ST_AsGeoJSON(geom)::json AS geometry, 
+          created_at, 
+          updated_at, 
+          source, 
+          metadata, 
+          user_id, 
+          is_shared
         FROM spatial_features
         WHERE (is_shared = true OR user_id = $1)
       `;
@@ -80,7 +89,7 @@ const resolvers = {
           createdAt: row.created_at,
           updatedAt: row.updated_at,
           source: row.source,
-          meta: row.metadata,
+          meta: row.metadata, // ✅ Harus sama dengan metadata dari DB
           user_id: row.user_id,
           is_shared: row.is_shared,
         }));
@@ -172,6 +181,7 @@ const resolvers = {
 
       if (!layerType || !geometry || typeof geometry !== "object") throw new Error("Data tidak valid");
 
+      // Normalisasi geometri
       if (geometry.type === "Point") {
         const [rawLon, rawLat] = geometry.coordinates;
         if (!isValidNumber(rawLon) || !isValidNumber(rawLat)) throw new Error("Koordinat tidak valid");
@@ -183,14 +193,26 @@ const resolvers = {
         geometry.coordinates = normalize(geometry.coordinates);
       }
 
+      // ✅ Pastikan meta tidak null/undefined
+      const safeMeta = meta ? { ...meta } : {};
+
       const query = `
         INSERT INTO spatial_features (layer_type, name, description, geom, source, metadata, user_id, is_shared)
         VALUES ($1, $2, $3, ST_SetSRID(ST_GeomFromGeoJSON($4), 4326), $5, $6, $7, false)
-        RETURNING id, layer_type, name, description, ST_AsGeoJSON(geom)::json AS geometry, created_at, source, metadata
+        RETURNING 
+          id, 
+          layer_type, 
+          name, 
+          description, 
+          ST_AsGeoJSON(geom)::json AS geometry, 
+          created_at, 
+          source, 
+          metadata
       `;
 
       try {
-        const result = await client.query(query, [layerType, name || null, description || null, JSON.stringify(geometry), source || "manual", meta || {}, user.id]);
+        const result = await client.query(query, [layerType, name || null, description || null, JSON.stringify(geometry), source || "manual", safeMeta, user.id]);
+
         const row = result.rows[0];
         return {
           id: row.id,
@@ -200,7 +222,7 @@ const resolvers = {
           geometry: row.geometry,
           createdAt: row.created_at,
           source: row.source,
-          meta: row.metadata,
+          meta: row.metadata, // ✅ Ini harus berisi icon dan category
         };
       } catch (err) {
         console.error("❌ Error saat insert ke DB:", err);
@@ -235,7 +257,7 @@ const resolvers = {
       }
       if (meta !== undefined) {
         fields.push(`metadata = $${paramCount++}`);
-        values.push(meta);
+        values.push(meta ? { ...meta } : {});
       }
 
       if (fields.length === 0) {
@@ -249,7 +271,16 @@ const resolvers = {
         UPDATE spatial_features 
         SET ${fields.join(", ")}, updated_at = NOW()
         WHERE id = $${paramCount - 1} AND user_id = $${paramCount}
-        RETURNING id, layer_type, name, description, ST_AsGeoJSON(geom)::json AS geometry, created_at, updated_at, source, metadata
+        RETURNING 
+          id, 
+          layer_type, 
+          name, 
+          description, 
+          ST_AsGeoJSON(geom)::json AS geometry, 
+          created_at, 
+          updated_at, 
+          source, 
+          metadata
       `;
 
       try {
@@ -275,7 +306,7 @@ const resolvers = {
       }
     },
 
-    // ✅ 3. deleteSpatialFeature: Cek user_id
+    // ✅ 3. deleteSpatialFeature: Return MutationResponse
     deleteSpatialFeature: async (_, { id }, context) => {
       const user = getUserFromContext(context);
       if (!user) throw new Error("Unauthorized");
@@ -284,12 +315,21 @@ const resolvers = {
       try {
         const result = await client.query(query, [id, user.id]);
         if (result.rows.length === 0) {
-          throw new Error("Tidak punya izin hapus atau data tidak ditemukan");
+          return {
+            success: false,
+            message: "Tidak punya izin hapus atau data tidak ditemukan",
+          };
         }
-        return true;
+        return {
+          success: true,
+          message: "Feature berhasil dihapus",
+        };
       } catch (err) {
         console.error("❌ Gagal hapus feature:", err);
-        throw new Error(`Gagal hapus: ${err.message}`);
+        return {
+          success: false,
+          message: `Gagal hapus: ${err.message}`,
+        };
       }
     },
 
@@ -436,6 +476,33 @@ const resolvers = {
         throw new Error("Tidak ada hasil");
       } catch (err) {
         throw new Error(`Gagal proses survey: ${err.message}`);
+      }
+    },
+
+    // ✅ 9. deleteSurveyResults: Hapus semua hasil berdasarkan surveyId
+    deleteSurveyResults: async (_, { surveyId }, context) => {
+      const user = getUserFromContext(context);
+      if (!user) throw new Error("Unauthorized");
+
+      const query = `
+        DELETE FROM spatial_features 
+        WHERE metadata->>'survey_id' = $1 
+          AND user_id = $2
+          AND layer_type IN ('valid_transect_line', 'valid_sampling_point')
+        RETURNING id
+      `;
+      try {
+        const result = await client.query(query, [surveyId, user.id]);
+        return {
+          success: true,
+          message: `Berhasil hapus ${result.rows.length} feature dari survey ${surveyId}`,
+        };
+      } catch (err) {
+        console.error("❌ Gagal hapus hasil survey:", err);
+        return {
+          success: false,
+          message: "Gagal hapus hasil survey",
+        };
       }
     },
   },
