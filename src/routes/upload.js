@@ -1,12 +1,18 @@
 // src/routes/upload.js
 import express from "express";
-import uploadController from "../controllers/uploadController.js";
-import upload from "../utils/multerConfig.js";
+import multer from "multer";
+import { authenticate } from "../middleware/auth.js";
+import { importEchosounderCSV } from "../controllers/uploadController.js"; // ✅ Named import
 
 const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage() });
 
-router.post("/shp", upload.single("shapefile"), uploadController.importShp);
-router.post("/excel", upload.single("excel"), uploadController.importExcel);
+// --- Route: Upload CSV Echosounder ---
+router.post(
+  "/echosounder",
+  authenticate,
+  upload.single("file"),
+  importEchosounderCSV // ✅ Gunakan named export
+);
 
-// ✅ Tambahkan export default
 export default router;

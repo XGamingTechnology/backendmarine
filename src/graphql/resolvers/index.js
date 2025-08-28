@@ -24,26 +24,29 @@ const toNumber = (value) => {
   return isNaN(num) ? null : num;
 };
 
-// --- Middleware: Ekstrak user dari token ---
-const getUserFromContext = (context) => {
-  const authHeader = context.req?.headers?.authorization;
-  if (authHeader?.startsWith("Bearer ")) {
-    const token = authHeader.split(" ")[1];
-    try {
-      const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64").toString());
-      return { id: payload.userId, role: payload.role };
-    } catch (e) {
-      return null;
-    }
-  }
-  return null;
-};
+// --- Fungsi: Haversine Distance (untuk akurasi) ---
+function haversineDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371000; // meter
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+  const Δλ = ((lon2 - lon1) * Math.PI) / 180;
+
+  const a = Math.sin(Δφ / 2) * Math.sin(Δφ / 2) + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+}
 
 const resolvers = {
   Query: {
-    // ✅ 1. spatialFeatures: Bisa akses shared + milik user
+    // ✅ 1. spatialFeatures: Admin lihat semua, user lihat milik sendiri
     spatialFeatures: async (_, { layerType, source }, context) => {
-      const user = getUserFromContext(context);
+      const user = context.user;
+      console.log("🔍 Query: spatialFeatures");
+      console.log("👤 User:", user ? `${user.id} (${user.role})` : "Tidak ada");
+      console.log("FilterWhere:", { layerType, source });
+
       if (!user) throw new Error("Unauthorized");
 
       let query = `
@@ -60,27 +63,42 @@ const resolvers = {
           user_id, 
           is_shared
         FROM spatial_features
-        WHERE (is_shared = true OR user_id = $1)
+        WHERE 
       `;
-      const params = [user.id];
-      const whereClause = [];
+      const params = [];
+      let paramCount = 1;
+
+      if (user.role === "admin") {
+        // ✅ Admin: lihat semua data
+        console.log("✅ Role: admin → akses semua data");
+      } else {
+        // ✅ User biasa: hanya milik sendiri + shared
+        query += "(is_shared = true OR user_id = $1)";
+        params.push(user.id);
+        console.log("✅ Role: user → filter user_id =", user.id);
+      }
 
       if (layerType) {
-        whereClause.push(`layer_type = $${params.length + 1}`);
+        const clause = user.role === "admin" ? "$1" : `$${params.length + 1}`;
+        query += (params.length > 0 ? " AND " : "") + `layer_type = ${clause}`;
         params.push(layerType);
-      }
-      if (source) {
-        whereClause.push(`source = $${params.length + 1}`);
-        params.push(source);
+        console.log("FilterWhere: layerType =", layerType);
       }
 
-      if (whereClause.length > 0) {
-        query += " AND " + whereClause.join(" AND ");
+      if (source) {
+        const clause = user.role === "admin" ? (layerType ? "$2" : "$1") : `$${params.length + 1}`;
+        query += (params.length > 0 ? " AND " : "") + `source = ${clause}`;
+        params.push(source);
+        console.log("FilterWhere: source =", source);
       }
 
       try {
+        console.log("📝 SQL Query:", query);
+        console.log("📦 Params:", params);
         const result = await client.query(query, params);
-        return result.rows.map((row) => ({
+        console.log("✅ Result count:", result.rows.length);
+
+        const mapped = result.rows.map((row) => ({
           id: row.id,
           layerType: row.layer_type,
           name: row.name,
@@ -89,17 +107,20 @@ const resolvers = {
           createdAt: row.created_at,
           updatedAt: row.updated_at,
           source: row.source,
-          meta: row.metadata, // ✅ Harus sama dengan metadata dari DB
+          meta: row.metadata,
           user_id: row.user_id,
           is_shared: row.is_shared,
         }));
+
+        console.log("📤 Data dikembalikan:", mapped.length, "features");
+        return mapped;
       } catch (err) {
-        console.error("Error fetching spatialFeatures:", err);
+        console.error("❌ Error fetching spatialFeatures:", err);
         throw new Error("Gagal ambil data");
       }
     },
 
-    // ✅ 2. layerDefinitions: Tidak perlu user_id
+    // ✅ 2. layerDefinitions: Tidak butuh user
     layerDefinitions: async () => {
       const query = `SELECT id, name, description, layer_type, source, metadata, group_id FROM layer_definitions`;
       try {
@@ -119,14 +140,21 @@ const resolvers = {
       }
     },
 
-    // ✅ 3. layerOptions: Filter per user
+    // ✅ 3. layerOptions: Admin lihat semua, user lihat milik sendiri
     layerOptions: async (_, { layerType }, context) => {
-      const user = getUserFromContext(context);
+      const user = context.user;
       if (!user) throw new Error("Unauthorized");
 
-      const query = `SELECT id, name, layer_type FROM spatial_features WHERE layer_type = $1 AND (is_shared = true OR user_id = $2) ORDER BY name`;
+      let query = `SELECT id, name, layer_type FROM spatial_features WHERE layer_type = $1`;
+      const params = [layerType];
+
+      if (user.role !== "admin") {
+        query += ` AND (is_shared = true OR user_id = $2)`;
+        params.push(user.id);
+      }
+
       try {
-        const result = await client.query(query, [layerType, user.id]);
+        const result = await client.query(query, params);
         return result.rows.map((row) => ({
           id: row.id,
           name: row.name,
@@ -138,9 +166,97 @@ const resolvers = {
       }
     },
 
-    // ✅ 4. samplingPointsBySurveyId: Filter per user
+    // ✅ 4. samplingPointsBySurveyId: Untuk simulasi (butuh transect line)
     samplingPointsBySurveyId: async (_, { surveyId }, context) => {
-      const user = getUserFromContext(context);
+      const user = context.user;
+      console.log("🔍 Query: samplingPointsBySurveyId");
+      console.log("🆔 surveyId:", surveyId);
+      console.log("👤 User:", user ? `${user.id} (${user.role})` : "Tidak ada");
+
+      if (!user) throw new Error("Unauthorized");
+
+      const query = `
+        WITH transect_line AS (
+          SELECT geom AS line_geom
+          FROM spatial_features
+          WHERE 
+            layer_type = 'valid_transect_line'
+            AND metadata->>'survey_id' = $1
+            ${user.role === "admin" ? "" : "AND user_id = $2"}
+          LIMIT 1
+        ),
+        sampling_points AS (
+          SELECT 
+            id,
+            layer_type,
+            name,
+            description,
+            geom AS point_geom,
+            metadata,
+            ST_AsGeoJSON(geom)::json AS geometry_json
+          FROM spatial_features 
+          WHERE 
+            layer_type = 'valid_sampling_point'
+            AND metadata->>'survey_id' = $1
+            ${user.role === "admin" ? "" : "AND user_id = $2"}
+        )
+        SELECT 
+          sp.id,
+          sp.layer_type,
+          sp.name,
+          sp.description,
+          sp.geometry_json AS geometry,
+          sp.metadata,
+          ROUND(
+            (ST_LineLocatePoint(tl.line_geom, sp.point_geom) * ST_Length(tl.line_geom::geography))::numeric,
+            2
+          ) AS distance_from_start
+        FROM sampling_points sp
+        CROSS JOIN transect_line tl
+        ORDER BY distance_from_start;
+      `;
+
+      try {
+        const params = [surveyId, user.role === "admin" ? null : user.id];
+        console.log("📝 SQL Query:", query);
+        console.log("📦 Params:", params);
+
+        const result = await client.query(query, params);
+        console.log("✅ Result count:", result.rows.length);
+
+        return result.rows.map((row) => {
+          const meta = { ...row.metadata };
+          meta.distance_m = parseFloat(row.distance_from_start);
+          if (meta.kedalaman !== undefined) meta.kedalaman = -Math.abs(meta.kedalaman);
+          if (meta.depth_value !== undefined) meta.depth_value = -Math.abs(meta.depth_value);
+
+          return {
+            id: row.id,
+            layerType: row.layer_type,
+            name: row.name,
+            description: row.description,
+            geometry: row.geometry,
+            meta: meta,
+          };
+        });
+      } catch (err) {
+        console.error("❌ Gagal ambil samplingPointsBySurveyId:", err);
+        console.error("🔍 Error Detail:", {
+          message: err.message,
+          code: err.code,
+          stack: err.stack,
+        });
+        throw new Error("Gagal ambil data sampling. Pastikan transect line ada.");
+      }
+    },
+
+    // ✅ 5. fieldSurveyPointsBySurveyId: Untuk data lapangan (pakai sequence)
+    fieldSurveyPointsBySurveyId: async (_, { surveyId }, context) => {
+      const user = context.user;
+      console.log("🔍 Query: fieldSurveyPointsBySurveyId");
+      console.log("🆔 surveyId:", surveyId);
+      console.log("👤 User:", user ? `${user.id} (${user.role})` : "Tidak ada");
+
       if (!user) throw new Error("Unauthorized");
 
       const query = `
@@ -150,38 +266,87 @@ const resolvers = {
           name,
           description,
           ST_AsGeoJSON(geom)::json AS geometry,
-          metadata
+          created_at,
+          updated_at,
+          source,
+          metadata,
+          ST_X(geom::geometry) AS lon,
+          ST_Y(geom::geometry) AS lat
         FROM spatial_features 
-        WHERE layer_type = 'valid_sampling_point'
+        WHERE 
+          layer_type = 'valid_sampling_point'
           AND metadata->>'survey_id' = $1
           AND user_id = $2
+          AND (metadata ? 'sequence')
+        ORDER BY (metadata->>'sequence')::int;
       `;
+
       try {
-        const result = await client.query(query, [surveyId, user.id]);
-        return result.rows.map((row) => ({
-          id: row.id,
-          layerType: row.layer_type,
-          name: row.name,
-          description: row.description,
-          geometry: row.geometry,
-          meta: row.metadata,
-        }));
+        const params = [surveyId, user.id];
+        console.log("📝 SQL Query:", query);
+        console.log("📦 Params:", params);
+
+        const result = await client.query(query, params);
+        console.log("✅ Result count:", result.rows.length);
+        if (result.rows.length === 0) {
+          console.warn("⚠️ Tidak ada titik ditemukan untuk surveyId:", surveyId);
+          console.warn("🔍 Cek: apakah metadata->>'survey_id' benar?");
+          console.warn("🔍 Cek: apakah user_id =", user.id);
+          console.warn("🔍 Cek: apakah ada metadata ? 'sequence'");
+        }
+
+        let cumulativeDistance = 0;
+        const points = result.rows.map((row, i) => {
+          const meta = { ...row.metadata };
+
+          if (i === 0) {
+            meta.distance_m = 0;
+          } else {
+            const prev = result.rows[i - 1];
+            const distance = haversineDistance(prev.lat, prev.lon, row.lat, row.lon);
+            cumulativeDistance += distance;
+            meta.distance_m = cumulativeDistance;
+          }
+
+          if (meta.kedalaman !== undefined) {
+            meta.kedalaman = -Math.abs(parseFloat(meta.kedalaman));
+          }
+          if (meta.depth_value !== undefined) {
+            meta.depth_value = -Math.abs(parseFloat(meta.depth_value));
+          }
+
+          return {
+            id: row.id,
+            layerType: row.layer_type,
+            name: row.name,
+            description: row.description,
+            geometry: row.geometry,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
+            source: row.source,
+            meta: meta,
+            user_id: row.user_id,
+            is_shared: row.is_shared,
+          };
+        });
+
+        console.log("📤 Titik dikembalikan:", points.length);
+        return points;
       } catch (err) {
-        console.error("❌ Gagal ambil samplingPointsBySurveyId:", err);
-        throw new Error("Gagal ambil data sampling");
+        console.error("❌ Gagal ambil fieldSurveyPointsBySurveyId:", err);
+        throw new Error("Gagal ambil data survey lapangan.");
       }
     },
   },
 
   Mutation: {
-    // ✅ 1. createSpatialFeature: Simpan user_id
+    // ✅ 1. createSpatialFeature: Semua user bisa buat
     createSpatialFeature: async (_, { layerType, name, description, geometry, source, meta }, context) => {
-      const user = getUserFromContext(context);
+      const user = context.user;
       if (!user) throw new Error("Unauthorized");
 
       if (!layerType || !geometry || typeof geometry !== "object") throw new Error("Data tidak valid");
 
-      // Normalisasi geometri
       if (geometry.type === "Point") {
         const [rawLon, rawLat] = geometry.coordinates;
         if (!isValidNumber(rawLon) || !isValidNumber(rawLat)) throw new Error("Koordinat tidak valid");
@@ -193,7 +358,6 @@ const resolvers = {
         geometry.coordinates = normalize(geometry.coordinates);
       }
 
-      // ✅ Pastikan meta tidak null/undefined
       const safeMeta = meta ? { ...meta } : {};
 
       const query = `
@@ -222,7 +386,7 @@ const resolvers = {
           geometry: row.geometry,
           createdAt: row.created_at,
           source: row.source,
-          meta: row.metadata, // ✅ Ini harus berisi icon dan category
+          meta: row.metadata,
         };
       } catch (err) {
         console.error("❌ Error saat insert ke DB:", err);
@@ -230,9 +394,9 @@ const resolvers = {
       }
     },
 
-    // ✅ 2. updateSpatialFeature: Cek user_id
+    // ✅ 2. updateSpatialFeature: Admin bisa edit semua
     updateSpatialFeature: async (_, { id, name, description, geometry, source, meta }, context) => {
-      const user = getUserFromContext(context);
+      const user = context.user;
       if (!user) throw new Error("Unauthorized");
 
       const fields = [];
@@ -264,13 +428,16 @@ const resolvers = {
         throw new Error("Tidak ada field untuk diupdate");
       }
 
-      values.push(id, user.id);
-      paramCount = values.length;
+      values.push(id);
+      if (user.role !== "admin") {
+        values.push(user.id);
+      }
 
+      const userCondition = user.role === "admin" ? "" : "AND user_id = $2";
       const query = `
         UPDATE spatial_features 
         SET ${fields.join(", ")}, updated_at = NOW()
-        WHERE id = $${paramCount - 1} AND user_id = $${paramCount}
+        WHERE id = $1 ${userCondition}
         RETURNING 
           id, 
           layer_type, 
@@ -306,14 +473,16 @@ const resolvers = {
       }
     },
 
-    // ✅ 3. deleteSpatialFeature: Return MutationResponse
+    // ✅ 3. deleteSpatialFeature: Admin bisa hapus semua
     deleteSpatialFeature: async (_, { id }, context) => {
-      const user = getUserFromContext(context);
+      const user = context.user;
       if (!user) throw new Error("Unauthorized");
 
-      const query = `DELETE FROM spatial_features WHERE id = $1 AND user_id = $2 RETURNING id`;
+      const userCondition = user.role === "admin" ? "" : "AND user_id = $2";
+      const query = `DELETE FROM spatial_features WHERE id = $1 ${userCondition} RETURNING id`;
+
       try {
-        const result = await client.query(query, [id, user.id]);
+        const result = await client.query(query, [id, user.role === "admin" ? null : user.id]);
         if (result.rows.length === 0) {
           return {
             success: false,
@@ -333,9 +502,9 @@ const resolvers = {
       }
     },
 
-    // ✅ 4. saveRiverLineDraft: Simpan user_id
+    // ✅ 4. saveRiverLineDraft: Admin bisa simpan untuk semua user
     saveRiverLineDraft: async (_, { geom }, context) => {
-      const user = getUserFromContext(context);
+      const user = context.user;
       if (!user) throw new Error("Unauthorized");
 
       if (!geom || geom.type !== "LineString" || geom.coordinates.length < 2) {
@@ -356,9 +525,9 @@ const resolvers = {
       }
     },
 
-    // ✅ 5. savePolygonDraft: Simpan user_id
+    // ✅ 5. savePolygonDraft: Admin bisa simpan untuk semua user
     savePolygonDraft: async (_, { geom }, context) => {
-      const user = getUserFromContext(context);
+      const user = context.user;
       if (!user) throw new Error("Unauthorized");
 
       if (!geom || geom.type !== "Polygon" || geom.coordinates[0].length < 4) {
@@ -379,9 +548,9 @@ const resolvers = {
       }
     },
 
-    // ✅ 6. generateSurvey: Kirim user_id ke DB
+    // ✅ 6. generateSurvey: Admin bisa generate untuk semua
     generateSurvey: async (_, { surveyId, riverLineDraftId, areaId, spasi, panjang }, context) => {
-      const user = getUserFromContext(context);
+      const user = context.user;
       if (!user) throw new Error("Unauthorized");
 
       if (!surveyId || !riverLineDraftId || !areaId || spasi <= 0 || panjang <= 0) {
@@ -404,9 +573,9 @@ const resolvers = {
       }
     },
 
-    // ✅ 7. generateTransekFromPolygonByDraft: Kirim user_id
+    // ✅ 7. generateTransekFromPolygonByDraft: Admin bisa akses semua draft
     generateTransekFromPolygonByDraft: async (_, { surveyId, polygonDraftId, lineCount, pointCount, fixedSpacing }, context) => {
-      const user = getUserFromContext(context);
+      const user = context.user;
       if (!user) throw new Error("Unauthorized");
 
       if (!surveyId || !polygonDraftId) {
@@ -454,9 +623,9 @@ const resolvers = {
       }
     },
 
-    // ✅ 8. processSurveyWithLine: Kirim user_id
+    // ✅ 8. processSurveyWithLine: Admin bisa proses semua
     processSurveyWithLine: async (_, { surveyId, riverLine, areaId, spasi, panjang }, context) => {
-      const user = getUserFromContext(context);
+      const user = context.user;
       if (!user) throw new Error("Unauthorized");
 
       if (!surveyId || !riverLine || !areaId || spasi <= 0 || panjang <= 0) {
@@ -479,20 +648,21 @@ const resolvers = {
       }
     },
 
-    // ✅ 9. deleteSurveyResults: Hapus semua hasil berdasarkan surveyId
+    // ✅ 9. deleteSurveyResults: Admin bisa hapus hasil survey dari user lain
     deleteSurveyResults: async (_, { surveyId }, context) => {
-      const user = getUserFromContext(context);
+      const user = context.user;
       if (!user) throw new Error("Unauthorized");
 
+      const userCondition = user.role === "admin" ? "" : "AND user_id = $2";
       const query = `
         DELETE FROM spatial_features 
         WHERE metadata->>'survey_id' = $1 
-          AND user_id = $2
+          ${userCondition}
           AND layer_type IN ('valid_transect_line', 'valid_sampling_point')
         RETURNING id
       `;
       try {
-        const result = await client.query(query, [surveyId, user.id]);
+        const result = await client.query(query, [surveyId, user.role === "admin" ? null : user.id]);
         return {
           success: true,
           message: `Berhasil hapus ${result.rows.length} feature dari survey ${surveyId}`,

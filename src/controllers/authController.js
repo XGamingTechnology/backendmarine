@@ -4,6 +4,10 @@ import jwt from "jsonwebtoken";
 import client from "../config/database.js";
 
 const authController = {
+  /**
+   * POST /api/auth/login
+   * Login user dan kirim token + data user
+   */
   login: async (req, res) => {
     const { email, password } = req.body;
 
@@ -39,6 +43,7 @@ const authController = {
         });
       }
 
+      // ✅ Buat token dengan userId, role, email
       const token = jwt.sign({ userId: user.id, role: user.role, email: user.email }, process.env.JWT_SECRET || "rahasia", { expiresIn: "24h" });
 
       res.json({
@@ -63,6 +68,10 @@ const authController = {
     }
   },
 
+  /**
+   * POST /api/auth/register
+   * Registrasi user baru (role default = 'user')
+   */
   register: async (req, res) => {
     const { name, email, password, role = "user" } = req.body;
 

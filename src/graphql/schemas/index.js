@@ -36,7 +36,41 @@ const typeDefs = gql`
     updatedAt: String
     createdBy: User
     source: String
+
+    """
+    Metadata dinamis yang bisa berisi:
+
+    🔹 Styling:
+      - icon: String
+      - color: String
+      - fillColor: String
+      - fillOpacity: Float
+      - weight: Int
+
+    🔹 Data Survey:
+      - survey_id: String          → ID survei (misal: SURVEY_1756167280)
+      - transect_id: String        → ID transek (misal: SNAKE, TR_1)
+      - kedalaman: Float           → kedalaman (bisa negatif)
+      - depth_value: Float         → alternatif kedalaman
+      - distance_m: Float          → jarak dari awal transek (dihitung otomatis oleh resolver)
+
+    🔹 Toponimi:
+      - category: String           → kategori toponimi
+      - iconType: String           → tipe ikon
+      - imageUrl: String           → URL gambar kustom
+
+    Contoh:
+    {
+      "survey_id": "SURVEY_1756167280",
+      "transect_id": "SNAKE",
+      "kedalaman": -2.445,
+      "distance_m": 150.5,
+      "icon": "circle",
+      "color": "#16a34a"
+    }
+    """
     meta: JSON
+
     user_id: Int
     is_shared: Boolean
   }
@@ -60,6 +94,13 @@ const typeDefs = gql`
     description: String
     layerType: String!
     source: String
+
+    """
+    Metadata tambahan untuk konfigurasi layer:
+    - defaultStyle: { color, weight, fillColor, ... }
+    - isEditable: Boolean
+    - zIndex: Int
+    """
     meta: JSON
   }
 
@@ -92,8 +133,8 @@ const typeDefs = gql`
     imageHeight: Int
 
     # --- Toponimi & Kategori ---
-    category: String # ✅ Tambah: kategori toponimi
-    source: String # ✅ Opsional: tambah metadata.source
+    category: String # ✅ Kategori toponimi (misal: "Bendungan", "Jembatan")
+    source: String # ✅ Sumber data (opsional)
   }
 
   # Mutation Response standar
@@ -116,7 +157,7 @@ const typeDefs = gql`
     result: JSON # GeoJSON hasil akhir
   }
 
-  # Query utama
+  # 🔥 Tambahkan fieldSurveyPointsBySurveyId di type Query
   type Query {
     """
     Ambil semua spatial features, bisa difilter berdasarkan layerType atau source
@@ -145,9 +186,28 @@ const typeDefs = gql`
 
     """
     🔥 Ambil semua sampling point berdasarkan survey_id
-    Gunakan untuk export langsung tanpa ambil semua data
+
+    ⚠️ CATATAN: Resolver ini akan:
+      - Filter titik dengan layer_type = 'valid_sampling_point'
+      - Urutkan titik sepanjang 'valid_transect_line' terkait
+      - Hitung dan tambahkan \`distance_m\` ke \`meta\` (jarak dari awal transek)
+      - Pastikan \`kedalaman\` bernilai negatif (di bawah permukaan)
+
+    Cocok untuk:
+      - Chart penampang 2D
+      - Analisis profil sungai
+      - Ekspor data
     """
     samplingPointsBySurveyId(surveyId: String!): [SpatialFeature!]!
+
+    """
+    🔥 Ambil semua titik survey lapangan berdasarkan survey_id
+    - Tidak butuh valid_transect_line
+    - Urutkan berdasarkan 'sequence' di metadata
+    - Hitung jarak kumulatif antar titik
+    - Cocok untuk data hasil upload CSV (echosounder)
+    """
+    fieldSurveyPointsBySurveyId(surveyId: String!): [SpatialFeature!]!
   }
 
   type LayerGroup {
@@ -159,6 +219,9 @@ const typeDefs = gql`
   }
 
   extend type Query {
+    """
+    Ambil semua grup layer untuk pengelompokan di sidebar
+    """
     layerGroups: [LayerGroup!]!
   }
 

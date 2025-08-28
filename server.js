@@ -11,6 +11,9 @@ import jwt from "jsonwebtoken";
 import client from "./src/config/database.js";
 import toponimiIconsRoute from "./src/routes/toponimi-icons.js";
 
+// ✅ Import middleware autentikasi
+import { authenticate } from "./src/middleware/auth.js";
+
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -29,7 +32,9 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const httpServer = http.createServer(app);
 
-// --- Middleware: Verify JWT ---
+// --- Middleware: Verify JWT (untuk GraphQL) ---
+// Gunakan hasil dari middleware `authenticate` jika memungkinkan
+// Tapi tetap verifikasi di GraphQL untuk keamanan tambahan
 const getUserFromToken = (token) => {
   if (!token) return null;
   try {
@@ -43,53 +48,64 @@ const getUserFromToken = (token) => {
 
 app.use(
   cors({
-    origin: "*",
+    origin: "*", // 🚨 Hanya untuk development!
+    credentials: true,
   })
 );
 
 app.use(express.json({ limit: "50mb" }));
 app.use("/images", express.static(path.join(__dirname, "public", "images")));
 
-// ✅ Gunakan routes
-app.use("/api/auth", authRoute);
-app.use("/api/upload", uploadRoute);
-app.use("/api/status", statusRoute);
-app.use("/api", transectRoutes);
+// ✅ Gunakan middleware authenticate untuk semua route API (kecuali auth)
+app.use("/api/auth", authRoute); // ❌ Jangan proteksi
+app.use("/api/upload", authenticate, uploadRoute);
+app.use("/api/status", authenticate, statusRoute);
+app.use("/api", authenticate, transectRoutes);
+app.use("/api", authenticate, toponimiIconsRoute);
 
-// ✅ Gunakan route
-app.use("/api", toponimiIconsRoute); // atau app.use("/api/toponimi-icons", toponimiIconsRoute);
-
+// ✅ Route info
 app.get("/api", (req, res) => {
   res.json({ message: "WebGIS Backend API", version: "1.0" });
 });
 
+// --- GraphQL Server ---
 async function startApolloServer() {
   const server = new ApolloServer({
     typeDefs,
     resolvers,
     context: ({ req }) => {
-      const authHeader = req.headers.authorization;
+      // Ambil token dari header
+      const authHeader = req.headers?.authorization;
       const token = authHeader?.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
+
+      // Verifikasi token
       const user = getUserFromToken(token);
 
       return {
         req,
         client,
-        user,
+        user, // Tersedia di resolver
       };
     },
     introspection: true,
-    playground: process.env.NODE_ENV !== "production",
+    playground: process.env.NODE_ENV !== "production", // Aktif di dev
   });
 
   await server.start();
+
+  // Terapkan middleware GraphQL
   server.applyMiddleware({ app, path: "/graphql" });
 
+  // Jalankan server
   httpServer.listen(PORT, () => {
     console.log(`✅ Connected to PostgreSQL`);
     console.log(`🚀 Server running at http://localhost:${PORT}`);
     console.log(`🚀 GraphQL endpoint: http://localhost:${PORT}/graphql`);
     console.log(`💡 Playground: http://localhost:${PORT}/graphql`);
+    console.log("🔐 JWT_SECRET:", process.env.JWT_SECRET ? "Loaded" : "Missing!");
+    console.log("📦 PORT:", process.env.PORT);
+    console.log("🏠 Host:", process.env.DB_HOST || "localhost");
+    console.log("🗄️  Database:", process.env.DB_NAME);
   });
 }
 
