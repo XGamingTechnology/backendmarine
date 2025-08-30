@@ -2,7 +2,7 @@
 import db from "../config/database.js";
 
 /**
- * Controller: Upload CSV Echosounder
+ * Controller: Upload CSV Echosounder (Support 2D & 3D)
  * Harus dipanggil melalui route yang sudah pakai `authenticate`
  * Jadi `req.user` sudah tersedia
  */
@@ -35,15 +35,22 @@ export const importEchosounderCSV = async (req, res) => {
   const headerLine = lines[0];
   const headers = headerLine.split(",").map((h) => h.trim());
 
-  // ✅ Deteksi kolom
+  // ✅ Deteksi kolom (case-insensitive)
   const mapping = {};
   headers.forEach((h) => {
-    const norm = h.toLowerCase().trim();
+    const norm = h
+      .toLowerCase()
+      .trim()
+      .replace(/\s+/g, " ")
+      .replace(/[^\w\s]/g, "");
     if (norm.includes("jarak") || norm.includes("distance") || norm.includes("dist")) {
       mapping.jarak = h;
     }
     if (norm.includes("kedalaman") || norm.includes("depth") || norm.includes("deep")) {
       mapping.kedalaman = h;
+    }
+    if (norm.includes("offset") || norm.includes("lebar") || norm.includes("width")) {
+      mapping.offset = h;
     }
     if (norm.includes("latitude") || norm.includes("lat")) {
       mapping.latitude = h;
@@ -53,6 +60,7 @@ export const importEchosounderCSV = async (req, res) => {
     }
   });
 
+  // ✅ Validasi kolom wajib
   if (!mapping.jarak || !mapping.kedalaman) {
     return res.status(400).json({
       error: "CSV harus punya kolom jarak dan kedalaman",
@@ -76,10 +84,15 @@ export const importEchosounderCSV = async (req, res) => {
 
     const jarak = parseFloat(row[mapping.jarak]);
     const kedalaman = parseFloat(row[mapping.kedalaman]);
+    const offset = mapping.offset ? parseFloat(row[mapping.offset]) : 0; // default 0 jika tidak ada
     const latitude = mapping.latitude ? parseFloat(row[mapping.latitude]) : null;
     const longitude = mapping.longitude ? parseFloat(row[mapping.longitude]) : null;
 
-    if (isNaN(jarak) || isNaN(kedalaman)) continue;
+    // ✅ Validasi angka
+    if (isNaN(jarak) || isNaN(kedalaman) || (mapping.offset && isNaN(offset))) {
+      console.warn(`⚠️ [CSV] Baris ${i} dilewati: jarak=${jarak}, kedalaman=${kedalaman}, offset=${offset}`);
+      continue;
+    }
 
     // ✅ Buat metadata
     const metadata = {
@@ -92,6 +105,11 @@ export const importEchosounderCSV = async (req, res) => {
       sequence: i,
     };
 
+    // ✅ Tambah offset_m jika ada
+    if (mapping.offset) {
+      metadata.offset_m = offset;
+    }
+
     if (latitude && longitude && !isNaN(latitude) && !isNaN(longitude)) {
       metadata.latitude = latitude;
       metadata.longitude = longitude;
@@ -100,10 +118,13 @@ export const importEchosounderCSV = async (req, res) => {
     let geom = null;
     if (metadata.latitude && metadata.longitude) {
       geom = { type: "Point", coordinates: [longitude, latitude] };
+    } else {
+      // Jika tidak ada GPS, kita tidak bisa buat geom — tapi tetap simpan
+      console.warn(`⚠️ [CSV] Baris ${i}: Tidak ada koordinat GPS, geom tidak dibuat`);
     }
 
     const name = `Titik ${jarak}m`;
-    const description = `Kedalaman: ${Math.abs(kedalaman)}m`;
+    const description = `Kedalaman: ${Math.abs(kedalaman)}m${mapping.offset ? `, Offset: ${offset}m` : ""}`;
 
     const query = `
       INSERT INTO spatial_features (
@@ -118,7 +139,7 @@ export const importEchosounderCSV = async (req, res) => {
         created_at
       ) VALUES (
         $1, $2, $3, 
-        ST_SetSRID(ST_GeomFromGeoJSON($4), 4326), 
+        ${geom ? "ST_SetSRID(ST_GeomFromGeoJSON($4), 4326)" : "NULL"},
         $5, $6, $7, false, NOW()
       )
       RETURNING id
@@ -132,11 +153,11 @@ export const importEchosounderCSV = async (req, res) => {
         geom ? JSON.stringify(geom) : null, // $4
         "import", // $5
         metadata, // $6
-        req.user.id, // $7 → ✅ HARUS SAMA DENGAN YANG DI TOKEN
+        req.user.id, // $7
       ]);
 
       console.log(`✅ [DB] Titik ${i} disimpan: user_id=${req.user.id}, survey_id=${surveyId}, id=${result.rows[0].id}`);
-      results.push({ jarak, kedalaman, latitude, longitude });
+      results.push({ jarak, kedalaman, offset, latitude, longitude });
     } catch (err) {
       console.error("❌ [DB] Gagal simpan titik:", err);
       return res.status(500).json({
@@ -157,5 +178,9 @@ export const importEchosounderCSV = async (req, res) => {
     count: results.length,
     results,
     surveyId,
+    type: results.some((r) => r.offset !== undefined && Math.abs(r.offset) > 0.1) ? "3d" : "2d",
   });
+  // Di uploadController.js
+  console.log("🔍 [UPLOAD] Headers asli:", headers);
+  console.log("🔍 [UPLOAD] Mapping kolom:", mapping);
 };

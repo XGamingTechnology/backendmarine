@@ -166,7 +166,7 @@ const resolvers = {
       }
     },
 
-    // ✅ 4. samplingPointsBySurveyId: Untuk simulasi (butuh transect line)
+    // ✅ 4. samplingPointsBySurveyId: Untuk simulasi (tambah offset_m)
     samplingPointsBySurveyId: async (_, { surveyId }, context) => {
       const user = context.user;
       console.log("🔍 Query: samplingPointsBySurveyId");
@@ -176,45 +176,54 @@ const resolvers = {
       if (!user) throw new Error("Unauthorized");
 
       const query = `
-        WITH transect_line AS (
-          SELECT geom AS line_geom
-          FROM spatial_features
-          WHERE 
-            layer_type = 'valid_transect_line'
-            AND metadata->>'survey_id' = $1
-            ${user.role === "admin" ? "" : "AND user_id = $2"}
-          LIMIT 1
-        ),
-        sampling_points AS (
-          SELECT 
-            id,
-            layer_type,
-            name,
-            description,
-            geom AS point_geom,
-            metadata,
-            ST_AsGeoJSON(geom)::json AS geometry_json
-          FROM spatial_features 
-          WHERE 
-            layer_type = 'valid_sampling_point'
-            AND metadata->>'survey_id' = $1
-            ${user.role === "admin" ? "" : "AND user_id = $2"}
-        )
-        SELECT 
-          sp.id,
-          sp.layer_type,
-          sp.name,
-          sp.description,
-          sp.geometry_json AS geometry,
-          sp.metadata,
-          ROUND(
-            (ST_LineLocatePoint(tl.line_geom, sp.point_geom) * ST_Length(tl.line_geom::geography))::numeric,
-            2
-          ) AS distance_from_start
-        FROM sampling_points sp
-        CROSS JOIN transect_line tl
-        ORDER BY distance_from_start;
-      `;
+    WITH transect_line AS (
+      SELECT geom AS line_geom
+      FROM spatial_features
+      WHERE 
+        layer_type = 'valid_transect_line'
+        AND metadata->>'survey_id' = $1
+        ${user.role === "admin" ? "" : "AND user_id = $2"}
+      LIMIT 1
+    ),
+    sampling_points AS (
+      SELECT 
+        id,
+        layer_type,
+        name,
+        description,
+        geom AS point_geom,
+        metadata,
+        ST_AsGeoJSON(geom)::json AS geometry_json
+      FROM spatial_features 
+      WHERE 
+        layer_type = 'valid_sampling_point'
+        AND metadata->>'survey_id' = $1
+        ${user.role === "admin" ? "" : "AND user_id = $2"}
+    )
+    SELECT 
+      sp.id,
+      sp.layer_type,
+      sp.name,
+      sp.description,
+      sp.geometry_json AS geometry,
+      sp.metadata,
+      -- Jarak sepanjang transect
+      ROUND(
+        (ST_LineLocatePoint(tl.line_geom, sp.point_geom) * ST_Length(tl.line_geom::geography))::numeric,
+        2
+      ) AS distance_from_start,
+      -- Ambil offset_m dari metadata (sudah dihitung di generate_survey)
+      (sp.metadata->>'offset_m')::DOUBLE PRECISION AS offset_m,
+      -- Kedalaman
+      COALESCE(
+        (sp.metadata->>'depth_value')::DOUBLE PRECISION,
+        (sp.metadata->>'kedalaman')::DOUBLE PRECISION,
+        0
+      ) AS depth_value
+    FROM sampling_points sp
+    CROSS JOIN transect_line tl
+    ORDER BY distance_from_start;
+  `;
 
       try {
         const params = [surveyId, user.role === "admin" ? null : user.id];
@@ -226,9 +235,11 @@ const resolvers = {
 
         return result.rows.map((row) => {
           const meta = { ...row.metadata };
+
+          // ✅ Tambah field yang sudah dihitung
           meta.distance_m = parseFloat(row.distance_from_start);
-          if (meta.kedalaman !== undefined) meta.kedalaman = -Math.abs(meta.kedalaman);
-          if (meta.depth_value !== undefined) meta.depth_value = -Math.abs(meta.depth_value);
+          meta.offset_m = parseFloat(row.offset_m); // ← dari backend
+          meta.depth_value = -Math.abs(parseFloat(row.depth_value)); // kedalaman negatif
 
           return {
             id: row.id,
@@ -241,11 +252,6 @@ const resolvers = {
         });
       } catch (err) {
         console.error("❌ Gagal ambil samplingPointsBySurveyId:", err);
-        console.error("🔍 Error Detail:", {
-          message: err.message,
-          code: err.code,
-          stack: err.stack,
-        });
         throw new Error("Gagal ambil data sampling. Pastikan transect line ada.");
       }
     },

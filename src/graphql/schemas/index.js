@@ -49,10 +49,12 @@ const typeDefs = gql`
 
     🔹 Data Survey:
       - survey_id: String          → ID survei (misal: SURVEY_1756167280)
-      - transect_id: String        → ID transek (misal: SNAKE, TR_1)
+      - transect_id: String        → ID transek (misal: TR_1)
       - kedalaman: Float           → kedalaman (bisa negatif)
-      - depth_value: Float         → alternatif kedalaman
-      - distance_m: Float          → jarak dari awal transek (dihitung otomatis oleh resolver)
+      - depth_value: Float         → alternatif kedalaman (dipakai di valid_sampling_point)
+      - distance_m: Float          → jarak dari awal sungai (x-axis)
+      - offset_m: Float            → jarak dari tengah sungai (y-axis, negatif = kiri)
+      - posisi: String             → 'kiri', 'tengah', 'kanan' (opsional)
 
     🔹 Toponimi:
       - category: String           → kategori toponimi
@@ -62,9 +64,11 @@ const typeDefs = gql`
     Contoh:
     {
       "survey_id": "SURVEY_1756167280",
-      "transect_id": "SNAKE",
-      "kedalaman": -2.445,
-      "distance_m": 150.5,
+      "transect_id": "TR_1",
+      "distance_m": 100.5,
+      "offset_m": -24.3,
+      "depth_value": -2.445,
+      "posisi": "kiri",
       "icon": "circle",
       "color": "#16a34a"
     }
