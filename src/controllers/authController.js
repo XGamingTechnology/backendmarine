@@ -44,7 +44,8 @@ const authController = {
       }
 
       // ✅ Buat token dengan userId, role, email
-      const token = jwt.sign({ userId: user.id, role: user.role, email: user.email }, process.env.JWT_SECRET || "rahasia", { expiresIn: "24h" });
+      // Ganti ini:
+      const token = jwt.sign({ id: user.id, role: user.role, email: user.email }, process.env.JWT_SECRET || "rahasia", { expiresIn: "24h" });
 
       res.json({
         success: true,

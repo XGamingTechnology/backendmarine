@@ -61,7 +61,8 @@ const resolvers = {
           source, 
           metadata, 
           user_id, 
-          is_shared
+          is_shared,
+          survey_id  -- ✅ TAMBAHKAN INI!
         FROM spatial_features
         WHERE 
       `;
@@ -166,7 +167,7 @@ const resolvers = {
       }
     },
 
-    // ✅ 4. samplingPointsBySurveyId: Untuk simulasi (tambah offset_m)
+    // ✅ 4. samplingPointsBySurveyId: Untuk simulasi (butuh transect line)
     samplingPointsBySurveyId: async (_, { surveyId }, context) => {
       const user = context.user;
       console.log("🔍 Query: samplingPointsBySurveyId");
@@ -176,54 +177,54 @@ const resolvers = {
       if (!user) throw new Error("Unauthorized");
 
       const query = `
-    WITH transect_line AS (
-      SELECT geom AS line_geom
-      FROM spatial_features
-      WHERE 
-        layer_type = 'valid_transect_line'
-        AND metadata->>'survey_id' = $1
-        ${user.role === "admin" ? "" : "AND user_id = $2"}
-      LIMIT 1
-    ),
-    sampling_points AS (
-      SELECT 
-        id,
-        layer_type,
-        name,
-        description,
-        geom AS point_geom,
-        metadata,
-        ST_AsGeoJSON(geom)::json AS geometry_json
-      FROM spatial_features 
-      WHERE 
-        layer_type = 'valid_sampling_point'
-        AND metadata->>'survey_id' = $1
-        ${user.role === "admin" ? "" : "AND user_id = $2"}
-    )
-    SELECT 
-      sp.id,
-      sp.layer_type,
-      sp.name,
-      sp.description,
-      sp.geometry_json AS geometry,
-      sp.metadata,
-      -- Jarak sepanjang transect
-      ROUND(
-        (ST_LineLocatePoint(tl.line_geom, sp.point_geom) * ST_Length(tl.line_geom::geography))::numeric,
-        2
-      ) AS distance_from_start,
-      -- Ambil offset_m dari metadata (sudah dihitung di generate_survey)
-      (sp.metadata->>'offset_m')::DOUBLE PRECISION AS offset_m,
-      -- Kedalaman
-      COALESCE(
-        (sp.metadata->>'depth_value')::DOUBLE PRECISION,
-        (sp.metadata->>'kedalaman')::DOUBLE PRECISION,
-        0
-      ) AS depth_value
-    FROM sampling_points sp
-    CROSS JOIN transect_line tl
-    ORDER BY distance_from_start;
-  `;
+        WITH transect_line AS (
+          SELECT geom AS line_geom
+          FROM spatial_features
+          WHERE 
+            layer_type = 'valid_transect_line'
+            AND metadata->>'survey_id' = $1
+            ${user.role === "admin" ? "" : "AND user_id = $2"}
+          LIMIT 1
+        ),
+        sampling_points AS (
+          SELECT 
+            id,
+            layer_type,
+            name,
+            description,
+            geom AS point_geom,
+            metadata,
+            ST_AsGeoJSON(geom)::json AS geometry_json
+          FROM spatial_features 
+          WHERE 
+            layer_type = 'valid_sampling_point'
+            AND metadata->>'survey_id' = $1
+            ${user.role === "admin" ? "" : "AND user_id = $2"}
+        )
+        SELECT 
+          sp.id,
+          sp.layer_type,
+          sp.name,
+          sp.description,
+          sp.geometry_json AS geometry,
+          sp.metadata,
+          -- Jarak sepanjang transect
+          ROUND(
+            (ST_LineLocatePoint(tl.line_geom, sp.point_geom) * ST_Length(tl.line_geom::geography))::numeric,
+            2
+          ) AS distance_from_start,
+          -- Ambil offset_m dari metadata (sudah dihitung di generate_survey)
+          (sp.metadata->>'offset_m')::DOUBLE PRECISION AS offset_m,
+          -- Kedalaman
+          COALESCE(
+            (sp.metadata->>'depth_value')::DOUBLE PRECISION,
+            (sp.metadata->>'kedalaman')::DOUBLE PRECISION,
+            0
+          ) AS depth_value
+        FROM sampling_points sp
+        CROSS JOIN transect_line tl
+        ORDER BY distance_from_start;
+      `;
 
       try {
         const params = [surveyId, user.role === "admin" ? null : user.id];
@@ -341,6 +342,69 @@ const resolvers = {
       } catch (err) {
         console.error("❌ Gagal ambil fieldSurveyPointsBySurveyId:", err);
         throw new Error("Gagal ambil data survey lapangan.");
+      }
+    },
+
+    // ✅ 6. simulatedPointsBySurveyId: Alternatif tanpa transect line
+    simulatedPointsBySurveyId: async (_, { surveyId }, context) => {
+      const user = context.user;
+      console.log("🔍 Query: simulatedPointsBySurveyId");
+      console.log("🆔 surveyId:", surveyId);
+      console.log("👤 User:", user ? `${user.id} (${user.role})` : "Tidak ada");
+
+      if (!user) throw new Error("Unauthorized");
+
+      const query = `
+        SELECT 
+          id,
+          layer_type,
+          name,
+          description,
+          ST_AsGeoJSON(geom)::json AS geometry,
+          metadata,
+          source
+        FROM spatial_features 
+        WHERE 
+          layer_type = 'valid_sampling_point'
+          AND (
+            metadata->>'survey_id' = $1 
+            OR name = $1
+          )
+          ${user.role === "admin" ? "" : "AND user_id = $2"}
+      `;
+
+      try {
+        const params = [surveyId, user.role === "admin" ? null : user.id];
+        console.log("📝 SQL Query:", query);
+        console.log("📦 Params:", params);
+
+        const result = await client.query(query, params);
+        console.log("✅ Result count:", result.rows.length);
+
+        return result.rows.map((row) => {
+          const meta = { ...row.metadata };
+
+          // Ambil jarak dari metadata atau default
+          const distance = parseFloat(meta.distance_m ?? meta.jarak ?? 0);
+          const depth = parseFloat(meta.depth_value ?? meta.kedalaman ?? 0);
+
+          // Tambah field yang dibutuhkan
+          meta.distance_m = distance;
+          meta.offset_m = parseFloat(meta.offset_m ?? 0);
+          meta.depth_value = -Math.abs(depth);
+
+          return {
+            id: row.id,
+            layerType: row.layer_type,
+            name: row.name,
+            description: row.description,
+            geometry: row.geometry,
+            meta: meta,
+          };
+        });
+      } catch (err) {
+        console.error("❌ Gagal ambil simulatedPointsBySurveyId:", err);
+        throw new Error("Gagal ambil data titik simulasi.");
       }
     },
   },

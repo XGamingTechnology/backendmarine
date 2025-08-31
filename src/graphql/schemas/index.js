@@ -212,6 +212,22 @@ const typeDefs = gql`
     - Cocok untuk data hasil upload CSV (echosounder)
     """
     fieldSurveyPointsBySurveyId(surveyId: String!): [SpatialFeature!]!
+
+    """
+    🔥 Ambil titik simulasi berdasarkan surveyId — tanpa perlu transect line
+
+    Cocok untuk:
+      - Titik yang dibuat manual (drawing)
+      - Simulasi tanpa proses transect
+      - Data dengan 'name = surveyId' atau 'meta.survey_id'
+      - Titik tanpa geometri kompleks
+
+    Akan tambahkan:
+      - meta.distance_m → dari metadata atau default
+      - meta.depth_value → negatif
+      - meta.offset_m → default 0
+    """
+    simulatedPointsBySurveyId(surveyId: String!): [SpatialFeature!]!
   }
 
   type LayerGroup {

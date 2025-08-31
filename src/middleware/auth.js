@@ -26,11 +26,10 @@ export const authenticate = (req, res, next) => {
 
     // ✅ Normalisasi: pastikan req.user punya .id
     req.user = {
-      id: decoded.id || decoded.userId, // ← Prioritaskan `id`, fallback ke `userId`
+      id: decoded.id, // ✅ Sudah benar
       role: decoded.role,
       email: decoded.email,
     };
-
     console.log("👤 [AUTH] req.user normalized:", req.user); // ✅ Log hasil normalisasi
     next(); // Lanjut ke route berikutnya
   } catch (err) {
