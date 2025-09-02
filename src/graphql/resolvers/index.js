@@ -62,7 +62,7 @@ const resolvers = {
           metadata, 
           user_id, 
           is_shared,
-          survey_id  -- ✅ TAMBAHKAN INI!
+          survey_id
         FROM spatial_features
         WHERE 
       `;
@@ -70,10 +70,8 @@ const resolvers = {
       let paramCount = 1;
 
       if (user.role === "admin") {
-        // ✅ Admin: lihat semua data
         console.log("✅ Role: admin → akses semua data");
       } else {
-        // ✅ User biasa: hanya milik sendiri + shared
         query += "(is_shared = true OR user_id = $1)";
         params.push(user.id);
         console.log("✅ Role: user → filter user_id =", user.id);
@@ -167,7 +165,7 @@ const resolvers = {
       }
     },
 
-    // ✅ 4. samplingPointsBySurveyId: Untuk simulasi (butuh transect line)
+    // ✅ 4. samplingPointsBySurveyId: Bisa baca dari metadata ATAU kolom survey_id
     samplingPointsBySurveyId: async (_, { surveyId }, context) => {
       const user = context.user;
       console.log("🔍 Query: samplingPointsBySurveyId");
@@ -176,13 +174,17 @@ const resolvers = {
 
       if (!user) throw new Error("Unauthorized");
 
-      const query = `
+      // --- Coba ambil dengan transect_line dulu ---
+      const queryWithTransect = `
         WITH transect_line AS (
           SELECT geom AS line_geom
           FROM spatial_features
           WHERE 
             layer_type = 'valid_transect_line'
-            AND metadata->>'survey_id' = $1
+            AND (
+              metadata->>'survey_id' = $1 
+              OR survey_id = $1
+            )
             ${user.role === "admin" ? "" : "AND user_id = $2"}
           LIMIT 1
         ),
@@ -198,7 +200,10 @@ const resolvers = {
           FROM spatial_features 
           WHERE 
             layer_type = 'valid_sampling_point'
-            AND metadata->>'survey_id' = $1
+            AND (
+              metadata->>'survey_id' = $1 
+              OR survey_id = $1
+            )
             ${user.role === "admin" ? "" : "AND user_id = $2"}
         )
         SELECT 
@@ -208,19 +213,16 @@ const resolvers = {
           sp.description,
           sp.geometry_json AS geometry,
           sp.metadata,
-          -- Jarak sepanjang transect
           ROUND(
             (ST_LineLocatePoint(tl.line_geom, sp.point_geom) * ST_Length(tl.line_geom::geography))::numeric,
             2
           ) AS distance_from_start,
-          -- Ambil offset_m dari metadata (sudah dihitung di generate_survey)
-          (sp.metadata->>'offset_m')::DOUBLE PRECISION AS offset_m,
-          -- Kedalaman
+          (sp.metadata->>'offset_m')::DOUBLE PRECISION AS offset_m_raw,
           COALESCE(
             (sp.metadata->>'depth_value')::DOUBLE PRECISION,
             (sp.metadata->>'kedalaman')::DOUBLE PRECISION,
             0
-          ) AS depth_value
+          ) AS depth_value_raw
         FROM sampling_points sp
         CROSS JOIN transect_line tl
         ORDER BY distance_from_start;
@@ -228,19 +230,67 @@ const resolvers = {
 
       try {
         const params = [surveyId, user.role === "admin" ? null : user.id];
-        console.log("📝 SQL Query:", query);
-        console.log("📦 Params:", params);
+        const result = await client.query(queryWithTransect, params);
 
-        const result = await client.query(query, params);
-        console.log("✅ Result count:", result.rows.length);
+        if (result.rows.length > 0) {
+          console.log("✅ Data ditemukan dengan transect_line:", result.rows.length, "titik");
+          return result.rows.map((row) => {
+            const meta = { ...row.metadata } || {};
+
+            meta.distance_m = parseFloat(row.distance_from_start);
+            meta.offset_m = parseFloat(row.offset_m_raw) || 0;
+            meta.depth_value = -Math.abs(parseFloat(row.depth_value_raw));
+
+            return {
+              id: row.id,
+              layerType: row.layer_type,
+              name: row.name,
+              description: row.description,
+              geometry: row.geometry,
+              meta: meta,
+            };
+          });
+        }
+      } catch (err) {
+        console.warn("⚠️ Gagal ambil dengan transect_line:", err.message);
+      }
+
+      // --- Fallback: ambil tanpa transect_line ---
+      console.log("🔁 Fallback ke data mentah (tanpa transect_line)");
+      const queryFallback = `
+        SELECT 
+          id,
+          layer_type,
+          name,
+          description,
+          ST_AsGeoJSON(geom)::json AS geometry,
+          metadata,
+          source
+        FROM spatial_features 
+        WHERE 
+          layer_type = 'valid_sampling_point'
+          AND (
+            metadata->>'survey_id' = $1 
+            OR survey_id = $1
+          )
+          ${user.role === "admin" ? "" : "AND user_id = $2"}
+      `;
+
+      try {
+        const params = [surveyId, user.role === "admin" ? null : user.id];
+        const result = await client.query(queryFallback, params);
+        console.log("✅ Fallback: Data ditemukan tanpa transect_line:", result.rows.length, "titik");
 
         return result.rows.map((row) => {
-          const meta = { ...row.metadata };
+          const meta = { ...row.metadata } || {};
 
-          // ✅ Tambah field yang sudah dihitung
-          meta.distance_m = parseFloat(row.distance_from_start);
-          meta.offset_m = parseFloat(row.offset_m); // ← dari backend
-          meta.depth_value = -Math.abs(parseFloat(row.depth_value)); // kedalaman negatif
+          const distance = parseFloat(meta.distance_m ?? 0);
+          const offset = parseFloat(meta.offset_m ?? 0);
+          const depth = parseFloat(meta.depth_value ?? meta.kedalaman ?? 0);
+
+          meta.distance_m = distance;
+          meta.offset_m = offset;
+          meta.depth_value = -Math.abs(depth);
 
           return {
             id: row.id,
@@ -252,8 +302,8 @@ const resolvers = {
           };
         });
       } catch (err) {
-        console.error("❌ Gagal ambil samplingPointsBySurveyId:", err);
-        throw new Error("Gagal ambil data sampling. Pastikan transect line ada.");
+        console.error("❌ Gagal ambil data simulasi (fallback):", err);
+        throw new Error("Gagal ambil data titik. Cek apakah titik ada di database.");
       }
     },
 
@@ -297,9 +347,9 @@ const resolvers = {
         console.log("✅ Result count:", result.rows.length);
         if (result.rows.length === 0) {
           console.warn("⚠️ Tidak ada titik ditemukan untuk surveyId:", surveyId);
-          console.warn("🔍 Cek: apakah metadata->>'survey_id' benar?");
-          console.warn("🔍 Cek: apakah user_id =", user.id);
-          console.warn("🔍 Cek: apakah ada metadata ? 'sequence'");
+          console.warn("🔍 Cek: metadata->>'survey_id'?");
+          console.warn("🔍 Cek: user_id =", user.id);
+          console.warn("🔍 Cek: metadata ? 'sequence'");
         }
 
         let cumulativeDistance = 0;
@@ -384,11 +434,9 @@ const resolvers = {
         return result.rows.map((row) => {
           const meta = { ...row.metadata };
 
-          // Ambil jarak dari metadata atau default
           const distance = parseFloat(meta.distance_m ?? meta.jarak ?? 0);
           const depth = parseFloat(meta.depth_value ?? meta.kedalaman ?? 0);
 
-          // Tambah field yang dibutuhkan
           meta.distance_m = distance;
           meta.offset_m = parseFloat(meta.offset_m ?? 0);
           meta.depth_value = -Math.abs(depth);
