@@ -40,7 +40,16 @@ app.use(
 );
 
 app.use(express.json({ limit: "50mb" }));
+
+// ✅ Serve static files
+// 1. Gambar umum
 app.use("/images", express.static(path.join(__dirname, "public", "images")));
+
+// 2. Ikon bawaan (frontend-like, tapi dari backend)
+app.use("/icons", express.static(path.join(__dirname, "public", "icons")));
+
+// 3. Ikon custom (harus dari backend)
+app.use("/icons/custom", express.static(path.join(__dirname, "public", "icons", "custom")));
 
 // --- Routes ---
 app.use("/api/auth", authRoute);
@@ -49,6 +58,7 @@ app.use("/api/status", authenticate, statusRoute);
 app.use("/api", authenticate, transectRoutes);
 app.use("/api", authenticate, toponimiIconsRoute);
 
+// Health check
 app.get("/api", (req, res) => {
   res.json({ message: "WebGIS Backend API", version: "1.0" });
 });
@@ -61,7 +71,7 @@ async function startApolloServer() {
     context: ({ req }) => ({
       req,
       db: client,
-      user: req.user || null, // ✅ req.user dari middleware
+      user: req.user || null,
     }),
     introspection: true,
     playground: process.env.NODE_ENV !== "production",
@@ -69,16 +79,19 @@ async function startApolloServer() {
 
   await server.start();
 
-  // ✅ 1. Middleware authenticate untuk /graphql
+  // ✅ Apply authentication sebelum GraphQL
   app.use("/graphql", authenticate);
 
-  // ✅ 2. Baru apply GraphQL middleware
+  // ✅ Apply GraphQL middleware
   server.applyMiddleware({ app, path: "/graphql" });
 
   httpServer.listen(PORT, () => {
     console.log(`✅ Connected to PostgreSQL`);
     console.log(`🚀 Server running at http://localhost:${PORT}`);
     console.log(`🚀 GraphQL endpoint: http://localhost:${PORT}/graphql`);
+    console.log(`📁 Static: /images → ${path.join(__dirname, "public", "images")}`);
+    console.log(`📁 Static: /icons → ${path.join(__dirname, "public", "icons")}`);
+    console.log(`📁 Static: /icons/custom → ${path.join(__dirname, "public", "icons", "custom")}`);
     console.log(`🔐 JWT Secret loaded: ${!!process.env.JWT_SECRET}`);
   });
 }

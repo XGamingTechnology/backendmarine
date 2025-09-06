@@ -2,47 +2,51 @@
 import multer from "multer";
 import path from "path";
 import { fileURLToPath } from "url";
-import { dirname } from "path";
+import fs from "fs";
 
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const uploadDir = path.join(__dirname, "../uploads");
+const __dirname = path.dirname(__filename);
+const UPLOAD_DIR = path.join(__dirname, "../uploads");
 
-// Buat folder uploads jika belum ada
-import fs from "fs";
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
+// ✅ Buat folder uploads jika belum ada
+if (!fs.existsSync(UPLOAD_DIR)) {
+  fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+  console.log("✅ Folder uploads dibuat:", UPLOAD_DIR);
 }
 
+// ✅ Storage untuk CSV & Excel
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    cb(null, uploadDir);
+    cb(null, UPLOAD_DIR);
   },
   filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
     const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    cb(null, `${file.fieldname}-${uniqueSuffix}${path.extname(file.originalname)}`);
+    cb(null, `upload-${uniqueSuffix}${ext}`);
   },
 });
 
-// Filter hanya file tertentu
+// ✅ Filter file: hanya CSV, Excel, ZIP
 const fileFilter = (req, file, cb) => {
   const ext = path.extname(file.originalname).toLowerCase();
   const mime = file.mimetype;
 
-  // Izinkan: .csv, .shp, .xlsx, .zip (untuk SHP)
-  if (ext === ".csv" || ext === ".xlsx" || ext === ".xls" || ext === ".zip" || mime === "application/vnd.ms-excel" || mime.includes("spreadsheet") || mime === "text/csv") {
+  const allowedTypes = [".csv", ".xlsx", ".xls", ".zip"];
+
+  const allowedMimes = ["text/csv", "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"];
+
+  if (allowedTypes.includes(ext) || allowedMimes.some((m) => mime.includes(m))) {
     cb(null, true);
   } else {
-    cb(new Error("Tipe file tidak didukung. Harus CSV, Excel, atau ZIP (SHP)"), false);
+    cb(new Error(`Format ${ext} tidak didukung. Harus CSV, Excel, atau ZIP.`), false);
   }
 };
 
+// ✅ Limit: 25MB
 const upload = multer({
   storage,
   fileFilter,
-  limits: {
-    fileSize: 25 * 1024 * 1024, // 25 MB
-  },
+  limits: { fileSize: 25 * 1024 * 1024 },
 });
 
 export default upload;

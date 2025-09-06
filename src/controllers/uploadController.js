@@ -2,14 +2,40 @@
 import csv from "csv-parser";
 import { Readable } from "stream";
 import client from "../config/database.js";
+import * as utm from "utm";
 
+// ✅ Validasi ekstensi file
+const isValidCSV = (originalname) => {
+  return /\.csv$/i.test(originalname);
+};
+
+// ✅ Konversi buffer ke stream dengan aman
+const bufferToStream = (buffer) => {
+  const stream = new Readable();
+  stream.push(buffer);
+  stream.push(null);
+  return stream;
+};
+
+/**
+ * Import CSV echosounder: baca file, konversi koordinat, simpan ke DB
+ */
 export const importEchosounderCSV = async (req, res) => {
   const { user } = req;
 
+  // ❌ Cek file
   if (!req.file) {
     return res.status(400).json({
       success: false,
-      error: "File tidak ditemukan",
+      error: "File tidak ditemukan. Harap unggah file CSV.",
+    });
+  }
+
+  // ❌ Cek ekstensi
+  if (!isValidCSV(req.file.originalname)) {
+    return res.status(400).json({
+      success: false,
+      error: `Format file tidak didukung: ${req.file.originalname}. Hanya file .csv yang diperbolehkan.`,
     });
   }
 
@@ -17,8 +43,8 @@ export const importEchosounderCSV = async (req, res) => {
   const surveyId = `SURVEY_${Date.now()}_${user.id}`;
   const is3D = req.body.is3D === "true";
 
-  const stream = Readable.from(req.file.buffer.toString());
-  stream
+  // 📊 Parsing CSV
+  bufferToStream(req.file.buffer)
     .pipe(csv())
     .on("data", (row) => {
       results.push(row);
@@ -27,7 +53,7 @@ export const importEchosounderCSV = async (req, res) => {
       if (results.length === 0) {
         return res.status(400).json({
           success: false,
-          error: "File CSV kosong atau format tidak valid",
+          error: "File CSV kosong atau tidak memiliki data yang dapat dibaca.",
         });
       }
 
@@ -41,11 +67,9 @@ export const importEchosounderCSV = async (req, res) => {
         const insertedIds = [];
 
         for (const [index, row] of results.entries()) {
-          // ✅ Baca dari nama kolom yang benar
+          // ✅ Baca nilai dari CSV
           const jarak = parseFloat(row["Jarak dari Awal (m)"]) || parseFloat(row.jarak) || parseFloat(row.distance) || index * 10;
-
           const kedalaman = parseFloat(row["Kedalaman (m)"]) || parseFloat(row.kedalaman) || parseFloat(row.depth) || 0;
-
           const offset = parseFloat(row["Offset (m)"]) || parseFloat(row.offset) || parseFloat(row.offset_m) || 0;
 
           if (isNaN(jarak) || isNaN(kedalaman)) {
@@ -53,32 +77,66 @@ export const importEchosounderCSV = async (req, res) => {
             continue;
           }
 
-          // 🌍 Koordinat dummy (untuk preview)
-          const baseLon = 104.76;
-          const baseLat = -2.98;
-          const lon = baseLon + offset / 100_000;
-          const lat = baseLat + jarak / 100_000;
+          let lat, lon;
 
-          // ✅ Metadata: tambahkan depth_value agar chart langsung jalan
+          // 🔍 DETEKSI FORMAT KOORDINAT
+          const rawLat = parseFloat(row.Latitude) || parseFloat(row.lat) || parseFloat(row.latitude);
+          const rawLon = parseFloat(row.Longitude) || parseFloat(row.lon) || parseFloat(row.longitude);
+          const easting = parseFloat(row.Easting) || parseFloat(row.x) || parseFloat(row.easting);
+          const northing = parseFloat(row.Northing) || parseFloat(row.y) || parseFloat(row.northing);
+          const zone = row.Zone || row.zone || row.zona; // misal: "48M"
+
+          if (!isNaN(rawLat) && !isNaN(rawLon)) {
+            // ✅ Format LatLon
+            lat = rawLat;
+            lon = rawLon;
+          } else if (!isNaN(easting) && !isNaN(northing)) {
+            // ✅ Format UTM
+            try {
+              const result = utm.toLatLon(easting, northing, zone ? parseInt(zone) : 48, zone?.endsWith("M") ? "M" : "N");
+              lat = result.latitude;
+              lon = result.longitude;
+            } catch (err) {
+              console.error("❌ Gagal konversi UTM:", err);
+              continue;
+            }
+          } else {
+            // ❌ Tidak ada koordinat valid
+            console.warn("❌ Tidak ada koordinat valid:", row);
+            continue;
+          }
+
+          // ✅ Metadata
           const metadata = {
             survey_id: surveyId,
-            jarak: jarak,
-            distance_m: jarak, // ✅ Untuk longitudinal
-            offset_m: offset, // ✅ Untuk cross-section
-            kedalaman: kedalaman,
-            depth_value: kedalaman, // ✅ Agar chart baca langsung
+            jarak,
+            distance_m: jarak,
+            offset_m: offset,
+            kedalaman,
+            depth_value: -Math.abs(kedalaman), // Nilai negatif ke bawah
             sequence: index,
             is_3d: is3D || false,
+            source: "import",
+            coord_source: !isNaN(rawLat) ? "LatLon" : "UTM",
+            ...(easting &&
+              northing && {
+                utm_easting: easting,
+                utm_northing: northing,
+                utm_zone: zone,
+              }),
           };
 
           const name = `Point ${jarak}m`;
 
-          const result = await client.query(query, ["valid_sampling_point", name, lon, lat, "import", metadata, user.id]);
-
-          insertedIds.push(result.rows[0].id);
+          try {
+            const result = await client.query(query, ["echosounder_point", name, lon, lat, "import", metadata, user.id]);
+            insertedIds.push(result.rows[0].id);
+          } catch (dbErr) {
+            console.error("❌ Gagal simpan titik:", dbErr);
+            continue; // Lanjut ke titik berikutnya
+          }
         }
 
-        // ✅ Simpan metadata survey untuk frontend
         const surveyMeta = {
           surveyId,
           date: new Date().toLocaleDateString("id-ID"),
@@ -100,7 +158,7 @@ export const importEchosounderCSV = async (req, res) => {
         console.error("❌ Gagal simpan ke database:", err);
         res.status(500).json({
           success: false,
-          error: "Gagal menyimpan data ke database",
+          error: "Gagal menyimpan data ke database. Cek koneksi atau struktur tabel.",
         });
       }
     })
@@ -108,7 +166,13 @@ export const importEchosounderCSV = async (req, res) => {
       console.error("❌ Gagal parsing CSV:", err);
       res.status(500).json({
         success: false,
-        error: "Gagal membaca file CSV",
+        error: "Gagal membaca file CSV. Pastikan format benar.",
       });
     });
+};
+
+// ✅ Export middleware untuk digunakan di route
+export const uploadCSV = (req, res, next) => {
+  // Middleware ini akan dihandle oleh multerConfig.js
+  next();
 };

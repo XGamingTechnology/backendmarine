@@ -307,7 +307,7 @@ const resolvers = {
       }
     },
 
-    // ✅ 5. fieldSurveyPointsBySurveyId: Untuk data lapangan (pakai sequence)
+    // ✅ 5. fieldSurveyPointsBySurveyId: Untuk data lapangan (pakai sequence) — DIPERBAIKI
     fieldSurveyPointsBySurveyId: async (_, { surveyId }, context) => {
       const user = context.user;
       console.log("🔍 Query: fieldSurveyPointsBySurveyId");
@@ -331,11 +331,14 @@ const resolvers = {
           ST_Y(geom::geometry) AS lat
         FROM spatial_features 
         WHERE 
-          layer_type = 'valid_sampling_point'
+          layer_type IN ('valid_sampling_point', 'echosounder_point')  -- ✅ Dua layer
           AND metadata->>'survey_id' = $1
           AND user_id = $2
-          AND (metadata ? 'sequence')
-        ORDER BY (metadata->>'sequence')::int;
+        ORDER BY 
+          CASE 
+            WHEN layer_type = 'valid_sampling_point' THEN (metadata->>'sequence')::int 
+            ELSE id 
+          END;
       `;
 
       try {
@@ -349,7 +352,6 @@ const resolvers = {
           console.warn("⚠️ Tidak ada titik ditemukan untuk surveyId:", surveyId);
           console.warn("🔍 Cek: metadata->>'survey_id'?");
           console.warn("🔍 Cek: user_id =", user.id);
-          console.warn("🔍 Cek: metadata ? 'sequence'");
         }
 
         let cumulativeDistance = 0;

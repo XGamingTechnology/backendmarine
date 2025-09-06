@@ -139,6 +139,7 @@ const typeDefs = gql`
     # --- Toponimi & Kategori ---
     category: String # ✅ Kategori toponimi (misal: "Bendungan", "Jembatan")
     source: String # ✅ Sumber data (opsional)
+    is_custom: Boolean
   }
 
   # Mutation Response standar
