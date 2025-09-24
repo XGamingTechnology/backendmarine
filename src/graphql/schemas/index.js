@@ -1,4 +1,3 @@
-// src/graphql/schemas/index.js
 import { gql } from "apollo-server-express";
 
 const typeDefs = gql`
@@ -55,11 +54,16 @@ const typeDefs = gql`
       - distance_m: Float          → jarak dari awal sungai (x-axis)
       - offset_m: Float            → jarak dari tengah sungai (y-axis, negatif = kiri)
       - posisi: String             → 'kiri', 'tengah', 'kanan' (opsional)
+      - centerline_source: String  → 'auto' atau 'manual'
 
     🔹 Toponimi:
       - category: String           → kategori toponimi
       - iconType: String           → tipe ikon
       - imageUrl: String           → URL gambar kustom
+
+    🔹 Batimetri:
+      - contour_interval: Float    → interval kontur (misal: 1.0)
+      - depth_value: Float         → kedalaman kontur (untuk styling warna)
 
     Contoh:
     {
@@ -70,7 +74,8 @@ const typeDefs = gql`
       "depth_value": -2.445,
       "posisi": "kiri",
       "icon": "circle",
-      "color": "#16a34a"
+      "color": "#16a34a",
+      "centerline_source": "manual"
     }
     """
     meta: JSON
@@ -162,6 +167,36 @@ const typeDefs = gql`
     result: JSON # GeoJSON hasil akhir
   }
 
+  # ✅ GenerateTransectsResult: Hasil dari generateTransectsFromPolygonAndLine
+  type GenerateTransectsResult {
+    success: Boolean!
+    message: String!
+    transects: JSON! # GeoJSON FeatureCollection
+  }
+
+  """
+  Hasil dari proses generate (transek, batimetri, dll)
+
+  Digunakan oleh:
+  - generateTransekFromPolygonByDraft
+  - generateBatimetriFromSamplingPoints
+  - dan proses generate lainnya
+  """
+  type GenerateResult {
+    success: Boolean!
+    message: String!
+
+    """
+    Data tambahan opsional — bisa berisi:
+    - pointCount: jumlah titik input
+    - contourCount: jumlah kontur dihasilkan
+    - depthRange: [min, max] kedalaman
+    - surveyId: ID survey terkait
+    - durationMs: durasi proses dalam milidetik
+    """
+    data: JSON
+  }
+
   # 🔥 Tambahkan fieldSurveyPointsBySurveyId di type Query
   type Query {
     """
@@ -229,6 +264,20 @@ const typeDefs = gql`
       - meta.offset_m → default 0
     """
     simulatedPointsBySurveyId(surveyId: String!): [SpatialFeature!]!
+
+    """
+    🔥 Ambil layer kontur & permukaan batimetri berdasarkan surveyId
+
+    Mengembalikan:
+      - layer_type = 'kontur_batimetri' → garis kontur kedalaman
+      - layer_type = 'permukaan_batimetri' → permukaan TIN
+
+    Cocok untuk:
+      - Visualisasi 3D dasar sungai
+      - Styling warna berdasarkan kedalaman
+      - Analisis volume sedimen
+    """
+    batimetriLayersBySurveyId(surveyId: String!): [SpatialFeature!]!
   }
 
   type LayerGroup {
@@ -304,20 +353,64 @@ const typeDefs = gql`
     processSurveyWithLine(surveyId: String!, riverLine: JSON!, areaId: Int!, spasi: Float!, panjang: Float!): ProcessSurveyResponse!
 
     """
-    🔥 Proses survey dari draft polygon (versi lama - kompatibilitas)
+    🔥 Proses transek dari draft polygon (versi lama - kompatibilitas)
     """
     generateTransekFromPolygon(surveyId: String!, polygonDraftId: Int!, lineCount: Int!, spacing: Float!): ProcessSurveyResponse!
 
     """
     🔥 Proses transek dari draft polygon (versi baru: bisa lineCount, pointCount, atau fixedSpacing)
     """
-    generateTransekFromPolygonByDraft(surveyId: String!, polygonDraftId: Int!, lineCount: Int, pointCount: Int, fixedSpacing: Float): ProcessSurveyResponse!
-
+    generateTransekFromPolygonByDraft(
+      surveyId: String!
+      polygonDraftId: Int
+      lineCount: Int
+      pointCount: Int
+      fixedSpacing: Float
+      centerlineGeom: JSON # ✅ TAMBAHKAN INI — opsional, untuk garis manual
+      mode: String
+    ): GenerateResult! # ✅ GANTI JADI GenerateResult
     """
     🔥 Hapus semua hasil survey berdasarkan surveyId
     Digunakan untuk regenerate hasil
     """
     deleteSurveyResults(surveyId: String!): MutationResponse!
+
+    """
+    🔥 Generate transek dari polygon + line manual via PostGIS
+
+    Parameters:
+    - polygon: GeoJSON Polygon
+    - line: GeoJSON LineString (garis tengah manual)
+    - mode: "interval" | "jumlah"
+    - interval: Float (jika mode = "interval")
+    - jumlah: Int (jika mode = "jumlah")
+    - panjangTransek: Float (panjang transek dalam km)
+
+    Returns:
+    - success: Boolean
+    - message: String
+    - transects: GeoJSON FeatureCollection
+    """
+    generateTransectsFromPolygonAndLine(polygon: JSON!, line: JSON!, mode: String!, interval: Float, jumlah: Int, panjangTransek: Float!): GenerateTransectsResult!
+
+    """
+    🔥 Generate kontur & batimetri dari titik sampling
+
+    Parameters:
+    - surveyId: String! → ID survei yang sudah memiliki titik sampling
+
+    Returns:
+    - success: Boolean
+    - message: String → "Kontur dan batimetri berhasil digenerate"
+    - data: JSON → { pointCount, depthRange, surveyId, ... }
+
+    Menghasilkan:
+    - layer_type = 'kontur_batimetri' → garis kontur kedalaman
+    - layer_type = 'permukaan_batimetri' → permukaan TIN
+
+    Disimpan ke spatial_features — bisa langsung ditampilkan di peta.
+    """
+    generateBatimetriFromSamplingPoints(surveyId: String!): GenerateResult!
   }
 `;
 

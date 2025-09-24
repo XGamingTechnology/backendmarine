@@ -1,4 +1,3 @@
-// src/graphql/resolvers/index.js
 import { Client } from "pg";
 import dotenv from "dotenv";
 
@@ -45,7 +44,7 @@ const resolvers = {
       const user = context.user;
       console.log("🔍 Query: spatialFeatures");
       console.log("👤 User:", user ? `${user.id} (${user.role})` : "Tidak ada");
-      console.log("FilterWhere:", { layerType, source });
+      console.log("<tool_call><tool_call>FilterWhere:", { layerType, source });
 
       if (!user) throw new Error("Unauthorized");
 
@@ -81,14 +80,14 @@ const resolvers = {
         const clause = user.role === "admin" ? "$1" : `$${params.length + 1}`;
         query += (params.length > 0 ? " AND " : "") + `layer_type = ${clause}`;
         params.push(layerType);
-        console.log("FilterWhere: layerType =", layerType);
+        console.log("<tool_call><tool_call> layerType =", layerType);
       }
 
       if (source) {
         const clause = user.role === "admin" ? (layerType ? "$2" : "$1") : `$${params.length + 1}`;
         query += (params.length > 0 ? " AND " : "") + `source = ${clause}`;
         params.push(source);
-        console.log("FilterWhere: source =", source);
+        console.log("<tool_call><tool_call> source =", source);
       }
 
       try {
@@ -331,7 +330,7 @@ const resolvers = {
           ST_Y(geom::geometry) AS lat
         FROM spatial_features 
         WHERE 
-          layer_type IN ('valid_sampling_point', 'echosounder_point')  -- ✅ Dua layer
+          layer_type IN ('valid_sampling_point', 'echosounder_point')  // ✅ Dua layer
           AND metadata->>'survey_id' = $1
           AND user_id = $2
         ORDER BY 
@@ -455,6 +454,44 @@ const resolvers = {
       } catch (err) {
         console.error("❌ Gagal ambil simulatedPointsBySurveyId:", err);
         throw new Error("Gagal ambil data titik simulasi.");
+      }
+    },
+
+    // ✅ 7. batimetriLayersBySurveyId: Ambil kontur & permukaan batimetri berdasarkan surveyId
+    batimetriLayersBySurveyId: async (_, { surveyId }, context) => {
+      const user = context.user;
+      if (!user) throw new Error("Unauthorized");
+
+      const query = `
+        SELECT 
+          id,
+          layer_type,
+          name,
+          description,
+          ST_AsGeoJSON(geom)::json AS geometry,
+          metadata,
+          source
+        FROM spatial_features 
+        WHERE 
+          layer_type IN ('kontur_batimetri', 'permukaan_batimetri')
+          AND metadata->>'survey_id' = $1
+          AND user_id = $2
+      `;
+
+      try {
+        const result = await client.query(query, [surveyId, user.id]);
+        return result.rows.map((row) => ({
+          id: row.id,
+          layerType: row.layer_type,
+          name: row.name,
+          description: row.description,
+          geometry: row.geometry,
+          meta: row.metadata,
+          source: row.source,
+        }));
+      } catch (err) {
+        console.error("❌ Gagal ambil batimetri layers:", err);
+        throw new Error("Gagal ambil data batimetri.");
       }
     },
   },
@@ -693,8 +730,8 @@ const resolvers = {
       }
     },
 
-    // ✅ 7. generateTransekFromPolygonByDraft: Admin bisa akses semua draft
-    generateTransekFromPolygonByDraft: async (_, { surveyId, polygonDraftId, lineCount, pointCount, fixedSpacing }, context) => {
+    // ✅ 7. generateTransekFromPolygonByDraft: Router ke fungsi yang tepat
+    generateTransekFromPolygonByDraft: async (_, { surveyId, polygonDraftId, lineCount, pointCount, fixedSpacing, centerlineGeom, mode }, context) => {
       const user = context.user;
       if (!user) throw new Error("Unauthorized");
 
@@ -705,6 +742,19 @@ const resolvers = {
         };
       }
 
+      // Validasi mode
+      const validModes = ["snake", "zigzag", "parallel"];
+      if (mode && !validModes.includes(mode)) {
+        return {
+          success: false,
+          message: `Mode tidak valid. Pilih: ${validModes.join(", ")}`,
+        };
+      }
+
+      // Default mode
+      const finalMode = mode || (centerlineGeom ? "parallel" : "snake");
+
+      // Validasi parameter
       const countArgs = [lineCount, pointCount, fixedSpacing].filter((x) => x !== null && x !== undefined).length;
       if (countArgs === 0) {
         return {
@@ -719,26 +769,96 @@ const resolvers = {
         };
       }
 
-      const query = `SELECT * FROM generate_transek_from_polygon_by_draft($1, $2, $3, $4, $5, $6)`;
       try {
-        const result = await client.query(query, [surveyId, polygonDraftId, lineCount || null, pointCount || null, fixedSpacing || null, user.id]);
+        let result;
 
-        if (result.rows.length > 0) {
-          const dbResult = result.rows[0].generate_transek_from_polygon_by_draft;
+        if (finalMode === "parallel") {
+          // ✅ Panggil fungsi PARALLEL — dengan ST_GeomFromGeoJSON
+          console.log("🚀 Mode: PARALLEL — memanggil generate_transek_polygon_parallel (7 params)");
+          const query = `
+            SELECT generate_transek_polygon_parallel(
+              $1::TEXT,          -- surveyId
+              $2::INTEGER,       -- polygonDraftId
+              $3::INTEGER,       -- lineCount
+              $4::INTEGER,       -- pointCount
+              $5::FLOAT,         -- fixedSpacing
+              $6::INTEGER,       -- userId
+              ST_GeomFromGeoJSON($7)  -- ✅ PERBAIKAN UTAMA — centerlineGeom (bisa NULL)
+            ) AS result
+          `;
+
+          // Konversi centerlineGeom dari GeoJSON ke string
+          let centerlineWKT = null;
+          if (centerlineGeom) {
+            if (centerlineGeom.type === "LineString" && Array.isArray(centerlineGeom.coordinates)) {
+              centerlineWKT = JSON.stringify(centerlineGeom);
+            } else {
+              return {
+                success: false,
+                message: "CenterlineGeom tidak valid. Harus berupa LineString GeoJSON.",
+              };
+            }
+          }
+
+          const params = [
+            surveyId,
+            polygonDraftId,
+            lineCount || null,
+            pointCount || null,
+            fixedSpacing || null,
+            user.id,
+            centerlineWKT, // <-- Parameter ke-7
+          ];
+
+          console.log("📦 Params untuk generate_transek_polygon_parallel:", params);
+
+          const pgResult = await client.query(query, params);
+          result = pgResult.rows[0].result;
+        } else {
+          // ✅ Panggil fungsi ZIGZAG/SNAKE
+          console.log("🚀 Mode: SNAKE/ZIGZAG — memanggil generate_transek_from_polygon_by_draft");
+          const query = `
+            SELECT generate_transek_from_polygon_by_draft(
+              $1::TEXT,
+              $2::INTEGER,
+              $3::INTEGER,
+              $4::INTEGER,
+              $5::FLOAT,
+              $6::INTEGER,
+              $7::TEXT
+            ) AS result
+          `;
+
+          const params = [
+            surveyId,
+            polygonDraftId,
+            lineCount || null,
+            pointCount || null,
+            fixedSpacing || null,
+            user.id,
+            finalMode, // 'snake' atau 'zigzag'
+          ];
+
+          const pgResult = await client.query(query, params);
+          result = pgResult.rows[0].result;
+        }
+
+        if (!result.success) {
           return {
-            success: dbResult.success,
-            message: dbResult.message,
+            success: false,
+            message: result.message || "Proses gagal di database",
           };
         }
+
         return {
-          success: false,
-          message: "Tidak ada hasil dari fungsi DB",
+          success: true,
+          message: result.message || "Proses transek selesai",
         };
       } catch (err) {
-        console.error("❌ Gagal proses transek dari polygon:", err);
+        console.error(`❌ [${finalMode.toUpperCase()}] Error:`, err);
         return {
           success: false,
-          message: `Gagal proses transek dari polygon: ${err.message}`,
+          message: `Gagal proses transek (${finalMode}): ${err.message}`,
         };
       }
     },
@@ -793,6 +913,136 @@ const resolvers = {
           success: false,
           message: "Gagal hapus hasil survey",
         };
+      }
+    },
+
+    // ✅ 10. generateBatimetriFromSamplingPoints: Generate kontur & batimetri dari titik sampling — DIPERBAIKI
+    generateBatimetriFromSamplingPoints: async (_, { surveyId }, context) => {
+      const user = context.user;
+      if (!user) {
+        console.warn("❌ Unauthorized access to generateBatimetriFromSamplingPoints");
+        return {
+          success: false,
+          message: "Unauthorized",
+        };
+      }
+
+      if (!surveyId) {
+        console.warn("❌ Parameter surveyId tidak diberikan");
+        return {
+          success: false,
+          message: "Parameter surveyId wajib diisi",
+        };
+      }
+
+      console.log(`🚀 Memulai generate batimetri untuk surveyId: ${surveyId}, userId: ${user.id}`);
+
+      try {
+        // ✅ PERBAIKAN UTAMA: Ganti "properties" → "metadata"
+        const checkQuery = `
+      SELECT COUNT(*) as count
+      FROM spatial_features
+      WHERE layer_type = 'valid_sampling_point'
+        AND (metadata->>'survey_id' = $1 OR survey_id = $1)
+        AND user_id = $2
+    `;
+        const checkResult = await client.query(checkQuery, [surveyId, user.id]);
+        const pointCount = parseInt(checkResult.rows[0].count);
+
+        if (pointCount === 0) {
+          console.warn(`⚠️ Tidak ada titik sampling ditemukan untuk surveyId: ${surveyId}`);
+          return {
+            success: false,
+            message: `Tidak ada titik sampling ditemukan untuk survey ID: ${surveyId}`,
+          };
+        }
+
+        console.log(`✅ Ditemukan ${pointCount} titik sampling — melanjutkan generate...`);
+
+        // ✅ Panggil function PostGIS
+        const query = `
+      SELECT generate_batimetri_from_sampling_points($1, $2) AS result
+    `;
+        const result = await client.query(query, [surveyId, user.id]);
+
+        if (result.rows.length === 0) {
+          console.error("❌ Function PostGIS tidak mengembalikan hasil");
+          return {
+            success: false,
+            message: "Function generate gagal — tidak ada hasil dari database",
+          };
+        }
+
+        const pgResult = result.rows[0].result;
+
+        if (!pgResult || typeof pgResult !== "object") {
+          console.error("❌ Hasil dari function PostGIS tidak valid:", pgResult);
+          return {
+            success: false,
+            message: "Hasil generate tidak valid — cek function PostGIS",
+          };
+        }
+
+        if (!pgResult.success) {
+          console.error("❌ Function PostGIS melaporkan error:", pgResult.message);
+          return {
+            success: false,
+            message: pgResult.message || "Gagal generate batimetri di database",
+          };
+        }
+
+        console.log("✅ Batimetri berhasil digenerate di PostGIS");
+        return {
+          success: true,
+          message: pgResult.message || "Kontur dan batimetri berhasil digenerate",
+        };
+      } catch (err) {
+        console.error("🔥 Error saat generate batimetri:", err);
+        return {
+          success: false,
+          message: `Gagal generate: ${err.message}`,
+        };
+      }
+    },
+
+    // ❌ 11. generateTransectsFromPolygonAndLine: TIDAK DIGUNAKAN LAGI — bisa dihapus
+    // Karena fungsionalitasnya sudah digantikan oleh generate_transek_polygon_parallel
+    // Tapi tetap saya biarkan untuk backward compatibility
+    generateTransectsFromPolygonAndLine: async (_, { polygon, line, mode, interval, jumlah, panjangTransek }, context) => {
+      const user = context.user;
+      if (!user) throw new Error("Unauthorized");
+
+      if (!polygon || !line || !mode || !panjangTransek) {
+        throw new Error("Parameter tidak valid");
+      }
+
+      if (mode !== "interval" && mode !== "jumlah") {
+        throw new Error("Mode harus 'interval' atau 'jumlah'");
+      }
+
+      if (mode === "interval" && (!interval || interval <= 0)) {
+        throw new Error("Interval harus > 0");
+      }
+
+      if (mode === "jumlah" && (!jumlah || jumlah < 2)) {
+        throw new Error("Jumlah transek harus >= 2");
+      }
+
+      try {
+        const query = `
+          SELECT generate_transects_from_polygon_and_line($1, $2, $3, $4, $5, $6) as transects
+        `;
+        const result = await client.query(query, [JSON.stringify(polygon), JSON.stringify(line), mode, interval || null, jumlah || null, panjangTransek]);
+        const transects = result.rows[0].transects;
+
+        return {
+          success: true,
+          message: "Transek berhasil digenerate",
+          transects: transects,
+        };
+      } catch (err) {
+        console.error("❌ Gagal generate transek:", err);
+        throw new Error(`Gagal generate transek: ${err.message}`);
       }
     },
   },

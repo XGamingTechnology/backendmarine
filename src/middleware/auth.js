@@ -24,9 +24,9 @@ export const authenticate = (req, res, next) => {
 
     console.log("🔐 [AUTH] JWT Decoded:", decoded); // 🔥 Log untuk debug
 
-    // ✅ Normalisasi: pastikan req.user punya .id
+    // ✅✅✅ PERBAIKAN UTAMA: Ambil ID dari 'userId', bukan 'id'
     req.user = {
-      id: decoded.id, // ✅ Sudah benar
+      id: decoded.userId, // <-- INI YANG HARUS DIPERBAIKI
       role: decoded.role,
       email: decoded.email,
     };

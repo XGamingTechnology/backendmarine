@@ -43,9 +43,12 @@ const authController = {
         });
       }
 
-      // ✅ Buat token dengan userId, role, email
-      // Ganti ini:
-      const token = jwt.sign({ id: user.id, role: user.role, email: user.email }, process.env.JWT_SECRET || "rahasia", { expiresIn: "24h" });
+      // ✅ PERBAIKAN UTAMA: Gunakan 'userId' agar konsisten dengan register() dan middleware
+      const token = jwt.sign(
+        { userId: user.id, role: user.role, email: user.email }, // <-- Ganti 'id' menjadi 'userId'
+        process.env.JWT_SECRET || "rahasia",
+        { expiresIn: "24h" }
+      );
 
       res.json({
         success: true,
@@ -109,6 +112,7 @@ const authController = {
       );
 
       const newUser = result.rows[0];
+      // ✅ Sudah benar: Menggunakan 'userId'
       const token = jwt.sign({ userId: newUser.id, role: newUser.role, email: newUser.email }, process.env.JWT_SECRET || "rahasia", { expiresIn: "24h" });
 
       res.json({
